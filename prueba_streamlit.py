@@ -12,4 +12,4 @@ st.write("Esto es una prueba muy iconica de lo que se puede hacer con Streamlit"
 
 st.markdown("Y la verdad es que está muy bueno 🎈")
 
-
+st.snow()
