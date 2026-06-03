@@ -12,4 +12,5 @@ st.write("Esto es una prueba muy iconica de lo que se puede hacer con Streamlit"
 
 st.markdown("Y la verdad es que está muy bueno 🎈")
 
-st.snow()
+st.text_area("Significa que acá podes escribir lo que quieras.")
+
