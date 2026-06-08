@@ -306,5 +306,5 @@ mejores = df_alumnos.loc[
     df_alumnos.groupby("cursa")["nota"].idxmax()
 ]
 
-st.table(mejores)
+
 
