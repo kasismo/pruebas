@@ -18,14 +18,12 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Inicializar conexión a Supabase
-@st.cache_resource
+# Comenta esta línea temporalmente
+# @st.cache_resource
 def init_connection() -> Client:
     url = st.secrets["SUPABASE_URL"]
     key = st.secrets["SUPABASE_KEY"]
     return create_client(url, key)
-
-supabase = init_connection()
 
 # -----------------------------------------------------------------------------
 # LÓGICA DE DATOS
