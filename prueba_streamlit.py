@@ -1,5 +1,6 @@
 import streamlit as st
 from supabase import create_client, Client
+import datetime # Agrega esto
 
 # Configuración de página: minimalista y oscura
 st.set_page_config(
@@ -42,11 +43,14 @@ def obtener_perfil():
         return nuevo_perfil.data[0]
 
 def obtener_misiones_hoy(jugador_id):
-    # Fetch de las misiones del día actual
+    # Obtenemos la fecha de hoy en formato 'YYYY-MM-DD'
+    hoy = datetime.date.today().isoformat()
+    
+    # Hacemos el fetch con la fecha correcta
     respuesta = supabase.table("misiones_diarias")\
         .select("*")\
         .eq("jugador_id", jugador_id)\
-        .eq("fecha", "CURRENT_DATE")\
+        .eq("fecha", hoy)\
         .execute()
     return respuesta.data
 
