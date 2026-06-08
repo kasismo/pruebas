@@ -118,7 +118,6 @@ if input_value == "biologia":
 elif input_value == "fisica":
     print(alumno1.nombre, (f"Debería de cambiar de asiento con {alumno3.nombre} para poder estudiar su enciclopedia"))
 
-st.write()
 
 #----------------------------------
 # LIBRO DISTRIBUICIÓN X ASIGNATURA
@@ -235,11 +234,11 @@ print(df_alumnos.head())
 
 promedios = df_alumnos.groupby("cursa")["nota"].mean()
 
-print(promedios)
+st.table(promedios)
 
 cantidad = df_alumnos["cursa"].value_counts()
 
-print(cantidad)
+st.table(cantidad)
 
 aprobados = df_alumnos[df_alumnos["nota"] >= 7]
 
@@ -252,5 +251,5 @@ mejores = df_alumnos.loc[
     df_alumnos.groupby("cursa")["nota"].idxmax()
 ]
 
-print(mejores)
+st.table(mejores)
 
