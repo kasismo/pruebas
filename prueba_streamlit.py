@@ -106,19 +106,33 @@ alumno31, alumno32, alumno33, alumno34, alumno35, alumno36, alumno37, alumno38, 
 alumno41, alumno42, alumno43, alumno44, alumno45, alumno46, alumno47, alumno48, alumno49,
 alumno50, alumno51, alumno52, alumno53, alumno54]
 
+#---------------------
+# Seccion de horarios
+#---------------------
+st.header("🕒 Materias de esta mañana")
+col1, col2 = st.columns(2)
+with col1:
+    st.info(f"**{materia1.nombre}**: {materia1.horario}")
+with col2:
+    st.info(f"**{materia2.nombre}**: {materia2.horario}")
 
+st.divider()
 #---------------------------------------------
 # PRUEBA DE LOGICA, ESTILO ASIGNATURA Y SALÓN
 #---------------------------------------------
+st.header("🧠 Prueba Lógica Por Asignatura")
+st.write("Selecciona una materia para ver la recomendación del sistema: ")
 
-input_value = input("El alumno qué cursa: ")
+# esto remplaza al imput 
+input_value = st.selectbox("Elige la materia:", ["biologia", "fisica", "quimica", "matematica"])
+
 if input_value == "biologia":
-    print(alumno1.nombre, (f"del curso de {alumno1.cursa} debería tener la enciclopedia del {enciclopediabiologia.tema} para poder estudiar"))
+    st.success(f"{alumno1.nombre} del curso de {alumno1.cursa} debería tener la enciclopedia de '{enciclopediabiologia}' para poder estudiar.")
 
 elif input_value == "fisica":
-    print(alumno1.nombre, (f"Debería de cambiar de asiento con {alumno3.nombre} para poder estudiar su enciclopedia"))
+    st.warning(f"{alumno1.nombre} debería cambiar de asiento con {alumno3.nombre} para poder estudiar su enciclopedia")
 
-
+st.divider()
 #----------------------------------
 # LIBRO DISTRIBUICIÓN X ASIGNATURA
 #----------------------------------
@@ -194,11 +208,13 @@ libro51, libro52, libro53, libro54]
 #-------------------------------------
 # PATRÓN ALEATORIA DE LIBRO X MATERIA
 #-------------------------------------
-for numero in lista_libros:
+st.header("📚 Sorteo de Evaluación")
+# Usamos un botón para el random no cambie solo constantemente
+if st.button("Generar Libro Aleatorio"):
     select = random.choice(lista_libros)
+    st.success(f"El libro de la evaluación es el número **{select.numero}** de la asignatura **{select.asignatura.capitalize()}**.")
 
-print(f"El libro de la evaluación es el número {select.numero} de la asignatura {select.asignatura}")
-
+st.divider
 #----------------------------------------------
 # BUSCADOR DE ALUMNOS APROBADOS O DESAPROBADOS
 #----------------------------------------------
@@ -220,16 +236,55 @@ if input_value2 in ["biologia", "fisica", "quimica", "matematicas", "historia", 
 
 print(len(lista_libros))
 
+# ==========================================
+# SECCIÓN 4: BÚSQUEDA ROBUSTA Y DATAFRAMES
+# ==========================================
+st.header("📊 Análisis del Alumnado")
+
+# Creamos el DataFrame
 df_alumnos = pd.DataFrame([
-    {
-        "nombre": alumno.nombre,
-        "cursa": alumno.cursa,
-        "nota": alumno.nota
-    }
+    {"Nombre": alumno.nombre, "Asignatura": alumno.cursa.capitalize(), "Nota": alumno.nota}
     for alumno in lista_alumnos
 ])
 
-print(df_alumnos.head())
+# Reemplazamos tu segundo `input()` por un selector dinámico que lee directamente del DataFrame
+asignaturas_disponibles = df_alumnos["Asignatura"].unique().tolist()
+input_value2 = st.selectbox("¿De cuál asignatura quieres ver los resultados?", asignaturas_disponibles)
+
+# Filtramos el DataFrame con Pandas (es mucho más eficiente que hacer un loop 'for')
+df_filtrado = df_alumnos[df_alumnos["Asignatura"] == input_value2]
+
+# Separamos aprobados y desaprobados usando Pandas y los mostramos en columnas
+aprobados = df_filtrado[df_filtrado["Nota"] >= 7]
+desaprobados = df_filtrado[df_filtrado["Nota"] < 7]
+
+colA, colB = st.columns(2)
+with colA:
+    st.subheader("✅ Aprobados")
+    st.dataframe(aprobados, use_container_width=True, hide_index=True)
+
+with colB:
+    st.subheader("❌ Suspendidos")
+    st.dataframe(desaprobados, use_container_width=True, hide_index=True)
+
+# -------------------------
+# ESTADÍSTICAS GENERALES
+# -------------------------
+st.subheader("📈 Estadísticas Generales")
+tab1, tab2, tab3 = st.tabs(["Promedios", "Cantidad por Materia", "Mejores Notas"])
+
+with tab1:
+    promedios = df_alumnos.groupby("Asignatura")["Nota"].mean().reset_index()
+    st.dataframe(promedios, use_container_width=True, hide_index=True)
+
+with tab2:
+    cantidad = df_alumnos["Asignatura"].value_counts().reset_index()
+    cantidad.columns = ["Asignatura", "Cantidad de Alumnos"]
+    st.dataframe(cantidad, use_container_width=True, hide_index=True)
+
+with tab3:
+    mejores = df_alumnos.loc[df_alumnos.groupby("Asignatura")["Nota"].idxmax()]
+    st.dataframe(mejores, use_container_width=True, hide_index=True)
 
 
 promedios = df_alumnos.groupby("cursa")["nota"].mean()
