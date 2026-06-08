@@ -18,12 +18,14 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Comenta esta línea temporalmente
-# @st.cache_resource
+# Tu función (con o sin el @st.cache_resource, como la tengas ahora)
 def init_connection() -> Client:
     url = st.secrets["SUPABASE_URL"]
     key = st.secrets["SUPABASE_KEY"]
     return create_client(url, key)
+
+# 👇 ESTA ES LA LÍNEA VITAL QUE FALTA O SE BORRÓ 👇
+supabase = init_connection()
 
 # -----------------------------------------------------------------------------
 # LÓGICA DE DATOS
