@@ -117,18 +117,31 @@ def sincronizar_radar(jugador_id):
     return round(horas_totales_nuevas, 2)
 
 def otorgar_xp(jugador_id, cantidad_xp):
-    # 1. Obtener los stats actuales
     res = supabase.table("perfil_jugador").select("*").eq("id", jugador_id).execute()
     perfil = res.data[0]
     
     xp_actual = perfil['xp_actual'] + cantidad_xp
     nivel = perfil['nivel']
     xp_siguiente = perfil['xp_siguiente_nivel']
-    
-    # Para darle un toque RPG, subimos un atributo base al subir de nivel
-    inteligencia = perfil['inteligencia'] 
+    puntos_libres = perfil['puntos_atributo'] # Leemos los puntos actuales
     
     hubo_level_up = False
+    
+    while xp_actual >= xp_siguiente:
+        xp_actual -= xp_siguiente
+        nivel += 1
+        xp_siguiente = int(xp_siguiente * 1.1)
+        puntos_libres += 3 # Ganas 3 Puntos Libres por cada nivel
+        hubo_level_up = True
+        
+    supabase.table("perfil_jugador").update({
+        "nivel": nivel,
+        "xp_actual": int(xp_actual),
+        "xp_siguiente_nivel": xp_siguiente,
+        "puntos_atributo": puntos_libres # Guardamos los puntos
+    }).eq("id", jugador_id).execute()
+    
+    return hubo_level_up, nivel
     
     # 2. Lógica de Level Up (puede ocurrir múltiples veces si ganas mucha XP junta)
     while xp_actual >= xp_siguiente:
@@ -167,11 +180,40 @@ with col2:
     progreso_xp = perfil['xp_actual'] / perfil['xp_siguiente_nivel']
     st.progress(progreso_xp, text=f"XP: {perfil['xp_actual']} / {perfil['xp_siguiente_nivel']}")
 
+# (Dentro de la Sección 1 de tu código, reemplaza la col3 actual por esto)
+
 with col3:
     st.write(f"💪 STR: {perfil['fuerza']}")
     st.write(f"🧠 INT: {perfil['inteligencia']}")
     st.write(f"⚡ AGI: {perfil['agilidad']}")
-
+    
+    # Si hay puntos libres, mostramos el panel de distribución
+    if perfil.get('puntos_atributo', 0) > 0:
+        st.info(f"✨ Puntos Disponibles: {perfil['puntos_atributo']}")
+        
+        # Botones para asignar puntos
+        c_str, c_int, c_agi = st.columns(3)
+        with c_str:
+            if st.button("+ STR"):
+                supabase.table("perfil_jugador").update({
+                    "fuerza": perfil['fuerza'] + 1,
+                    "puntos_atributo": perfil['puntos_atributo'] - 1
+                }).eq("id", perfil['id']).execute()
+                st.rerun()
+        with c_int:
+            if st.button("+ INT"):
+                supabase.table("perfil_jugador").update({
+                    "inteligencia": perfil['inteligencia'] + 1,
+                    "puntos_atributo": perfil['puntos_atributo'] - 1
+                }).eq("id", perfil['id']).execute()
+                st.rerun()
+        with c_agi:
+            if st.button("+ AGI"):
+                supabase.table("perfil_jugador").update({
+                    "agilidad": perfil['agilidad'] + 1,
+                    "puntos_atributo": perfil['puntos_atributo'] - 1
+                }).eq("id", perfil['id']).execute()
+                st.rerun()
 st.markdown("---")
 
 # Sección 2: El Camino del Desarrollador (10k Horas)
