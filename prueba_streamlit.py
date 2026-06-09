@@ -187,9 +187,21 @@ st.progress(progreso_horas, text=f"Progreso 10.000 Horas: {round(horas_totales, 
 if st.button("📡 Sincronizar Radar de YouTube"):
     with st.spinner("Escaneando registro de entrenamiento..."):
         nuevas_horas = sincronizar_radar(perfil['id'])
+        
         if nuevas_horas > 0:
-            st.success(f"¡Registro actualizado! Añadidas {nuevas_horas} horas de XP pura.")
-            st.rerun() # Recarga la página para actualizar la barra visualmente
+            # Tu regla matemática: 5 XP por hora
+            xp_ganada = int(nuevas_horas * 5)
+            
+            # Disparamos la función de recompensas
+            level_up, nuevo_nivel = otorgar_xp(perfil['id'], xp_ganada)
+            
+            if level_up:
+                st.balloons() # Streamlit tira globos en la pantalla
+                st.success(f"¡LEVEL UP! El Sistema reconoce tu crecimiento. Nivel {nuevo_nivel} alcanzado. INT +1.")
+            else:
+                st.success(f"¡Registro actualizado! {nuevas_horas} horas añadidas. +{xp_ganada} XP.")
+            
+            st.rerun() # Recarga para que la barra amarilla de XP se actualice al instante
         else:
             st.info("No se detectaron nuevos entrenamientos en la lista.")
 
