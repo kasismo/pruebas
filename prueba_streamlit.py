@@ -1,6 +1,8 @@
 import streamlit as st
 from supabase import create_client, Client
 import datetime # Agrega esto
+import requests
+import re
 
 # Configuración de página: minimalista y oscura
 st.set_page_config(
