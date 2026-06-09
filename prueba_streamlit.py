@@ -156,3 +156,5 @@ def extraer_xp_de_youtube(jugador_id):
         }).execute()
         
     return round(horas_totales_nuevas, 2)
+
+st.button("Sincronizar Radar de Entrenamiento")
