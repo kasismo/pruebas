@@ -116,6 +116,38 @@ def sincronizar_radar(jugador_id):
         
     return round(horas_totales_nuevas, 2)
 
+def otorgar_xp(jugador_id, cantidad_xp):
+    # 1. Obtener los stats actuales
+    res = supabase.table("perfil_jugador").select("*").eq("id", jugador_id).execute()
+    perfil = res.data[0]
+    
+    xp_actual = perfil['xp_actual'] + cantidad_xp
+    nivel = perfil['nivel']
+    xp_siguiente = perfil['xp_siguiente_nivel']
+    
+    # Para darle un toque RPG, subimos un atributo base al subir de nivel
+    inteligencia = perfil['inteligencia'] 
+    
+    hubo_level_up = False
+    
+    # 2. Lógica de Level Up (puede ocurrir múltiples veces si ganas mucha XP junta)
+    while xp_actual >= xp_siguiente:
+        xp_actual -= xp_siguiente # Guardamos el sobrante de XP
+        nivel += 1
+        # Escalado progresivo: cada nivel requiere 10% más XP que el anterior
+        xp_siguiente = int(xp_siguiente * 1.1) 
+        inteligencia += 1 # Ganas +1 de INT permanente al subir de nivel
+        hubo_level_up = True
+        
+    # 3. Guardar el progreso en el servidor
+    supabase.table("perfil_jugador").update({
+        "nivel": nivel,
+        "xp_actual": int(xp_actual),
+        "xp_siguiente_nivel": xp_siguiente,
+        "inteligencia": inteligencia
+    }).eq("id", jugador_id).execute()
+    
+    return hubo_level_up, nivel
 # -----------------------------------------------------------------------------
 # INTERFAZ DE USUARIO (UI)
 # -----------------------------------------------------------------------------
