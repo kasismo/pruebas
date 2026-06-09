@@ -97,3 +97,60 @@ else:
             st.write(mision['descripcion'])
             # Aquí irá la lógica de check y feedback (sencillo, adecuado, etc.)
             st.divider()
+
+def extraer_xp_de_youtube(jugador_id):
+    api_key = st.secrets["YOUTUBE_API_KEY"]
+    playlist_id = st.secrets["YOUTUBE_PLAYLIST_ID"]
+    
+    # 1. Obtener los videos de la lista de reproducción
+    url_playlist = f"https://www.googleapis.com/youtube/v3/playlistItems?part=contentDetails&maxResults=50&playlistId={playlist_id}&key={api_key}"
+    res_playlist = requests.get(url_playlist).json()
+    
+    if "items" not in res_playlist:
+        return 0 # Si la lista está vacía o hay error
+        
+    video_ids = [item['contentDetails']['videoId'] for item in res_playlist['items']]
+    
+    # 2. Consultar qué videos ya procesamos en Supabase
+    res_db = supabase.table("historial_youtube").select("video_id").execute()
+    videos_procesados = [fila['video_id'] for fila in res_db.data]
+    
+    # Filtrar solo los videos nuevos
+    videos_nuevos = [vid for vid in video_ids if vid not in videos_procesados]
+    
+    if not videos_nuevos:
+        return 0 # No hay videos nuevos para procesar
+        
+    # 3. Obtener la duración de los videos nuevos
+    ids_string = ",".join(videos_nuevos)
+    url_videos = f"https://www.googleapis.com/youtube/v3/videos?part=contentDetails,snippet&id={ids_string}&key={api_key}"
+    res_videos = requests.get(url_videos).json()
+    
+    horas_totales_nuevas = 0
+    
+    for item in res_videos['items']:
+        vid_id = item['id']
+        titulo = item['snippet']['title']
+        duracion_iso = item['contentDetails']['duration']
+        
+        # Parsear PT1H2M10S a horas decimales
+        horas = re.search(r'(\d+)H', duracion_iso)
+        minutos = re.search(r'(\d+)M', duracion_iso)
+        segundos = re.search(r'(\d+)S', duracion_iso)
+        
+        h = int(horas.group(1)) if horas else 0
+        m = int(minutos.group(1)) if minutos else 0
+        s = int(segundos.group(1)) if segundos else 0
+        
+        duracion_decimal = h + (m / 60) + (s / 3600)
+        horas_totales_nuevas += duracion_decimal
+        
+        # Insertar registro en Supabase para no volver a contarlo
+        supabase.table("historial_youtube").insert({
+            "video_id": vid_id,
+            "titulo": titulo,
+            "duracion_horas": duracion_decimal,
+            "jugador_id": jugador_id
+        }).execute()
+        
+    return round(horas_totales_nuevas, 2)
