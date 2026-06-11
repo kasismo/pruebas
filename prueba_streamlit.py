@@ -201,10 +201,10 @@ def analizar_fisico(imagen, peso_actual):
     prompt = f"""
     Actúa estrictamente como un Sistema RPG de entrenamiento físico. 
     Analiza esta imagen de referencia deportiva del Jugador.
-    El usuario pesa {peso_actual} kg y está entrenando calistenia para lograr 25 flexiones de brazos consecutivas.
+    El usuario pesa {peso_actual} kg y está entrenando calistenia. Su objetivo principal es la Misión de Clase S: lograr 25 dominadas (pull-ups) estrictas consecutivas.
     Brinda un breve reporte motivacional estilo videojuego que incluya:
-    1. Observación de la musculatura visible enfocada en el rendimiento deportivo (pecho, hombros, core).
-    2. Un consejo técnico y constructivo sobre qué cadena muscular priorizar para levantar {peso_actual} kg con facilidad en flexiones.
+    1. Observación de la musculatura visible enfocada en el rendimiento de tracción vertical (espalda/dorsales, bíceps, core y postura).
+    2. Un consejo técnico y constructivo sobre qué cadena muscular priorizar para lograr traccionar sus {peso_actual} kg repetidas veces en la barra sin balanceo.
     3. Cierra con una frase épica del Sistema.
     """
     
