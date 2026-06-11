@@ -244,6 +244,12 @@ def analizar_fisico(imagen, peso_actual):
 st.title("STATUS PANEL")
 st.markdown("---")
 
+# --- SISTEMA DE ALARMA: LEVEL UP ---
+if st.session_state.get('play_level_up', False):
+    st.audio("level_up.mp3", autoplay=True)
+    st.balloons()
+    st.session_state['play_level_up'] = False # Apagamos el interruptor
+
 perfil = obtener_perfil()
 verificar_progreso_campana(perfil['id'], perfil)
 
@@ -318,11 +324,15 @@ with tab_svg:
       <polygon id="intelecto" class="glow" points="90,10 110,10 115,35 100,50 85,35" />
       
       <polygon id="espalda" class="glow" points="55,55 145,55 135,90 125,65 75,65 65,90" />
-      <polygon id="espalda" class="glow" points="60,65 70,95 65,160 50,160 50,100" /> <polygon id="espalda" class="glow" points="140,65 130,95 135,160 150,160 150,100" /> <polygon id="pecho" class="glow" points="70,60 130,60 125,95 100,105 75,95" />
+      <polygon id="espalda" class="glow" points="60,65 70,95 65,160 50,160 50,100" /> 
+      <polygon id="espalda" class="glow" points="140,65 130,95 135,160 150,160 150,100" /> 
+      <polygon id="pecho" class="glow" points="70,60 130,60 125,95 100,105 75,95" />
       
       <polygon id="core" class="glow" points="80,100 120,100 115,150 100,165 85,150" />
       
-      <polygon id="piernas" class="glow" points="80,160 100,170 100,220 85,340 70,340 75,220" /> <polygon id="piernas" class="glow" points="120,160 100,170 100,220 115,340 130,340 125,220" /> </svg>
+      <polygon id="piernas" class="glow" points="80,160 100,170 100,220 85,340 70,340 75,220" /> 
+      <polygon id="piernas" class="glow" points="120,160 100,170 100,220 115,340 130,340 125,220" /> 
+    </svg>
     """
     
     col_barras, col_grafico = st.columns([1, 1])
@@ -364,13 +374,13 @@ if st.button("📡 Sincronizar Radar de YouTube"):
             xp_ganada = int(nuevas_horas * 5)
             level_up, nuevo_nivel = otorgar_xp(perfil['id'], xp_ganada)
             if level_up:
-                # 🔊 REPRODUCTOR DEL BASS DROP OCULTO
-                st.audio("level_up.mp3", autoplay=True)
-                st.balloons()
+                # Encendemos la alarma en la memoria del sistema
+                st.session_state['play_level_up'] = True
                 st.success(f"¡LEVEL UP! Nivel {nuevo_nivel} alcanzado. +3 Puntos de Atributo disponibles.")
             else:
                 st.success(f"¡Registro actualizado! {nuevas_horas} horas añadidas. +{xp_ganada} XP.")
-            st.rerun() 
+            
+            st.rerun()
         else:
             st.info("No se detectaron nuevos entrenamientos en la lista.")
 
@@ -423,6 +433,13 @@ else:
                         # 3. Guardar como completada
                         supabase.table("misiones_diarias").update({"estado": "completada"}).eq("id", mision['id']).execute()
                         
+                        # Activar alarma si hubo level up
+                        if level_up:
+                            st.session_state['play_level_up'] = True
+                            st.toast(f"¡SUBIDA DE NIVEL! Ganaste +{xp_ganada} XP.")
+                        else:
+                            st.toast(f"Misión Cumplida. +{xp_ganada} XP añadida a tu barra.")
+                            
                         st.rerun() # Obliga a la app a recargar y mostrar los gráficos llenos
                         
                 with col2:
