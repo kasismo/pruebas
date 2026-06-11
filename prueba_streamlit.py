@@ -180,7 +180,7 @@ def sincronizar_radar(jugador_id):
         
     return round(horas_totales_nuevas, 2)
 
-def otorgar_xp(jugador_id, cantidad_xp):
+def otorgar_xp(jugador_id, cantidad_xp, zona_muscular=None):
     res = supabase.table("perfil_jugador").select("*").eq("id", jugador_id).execute()
     perfil = res.data[0]
     
@@ -189,8 +189,8 @@ def otorgar_xp(jugador_id, cantidad_xp):
     xp_siguiente = perfil['xp_siguiente_nivel']
     puntos_libres = perfil.get('puntos_atributo', 0)
     
+    # 1. Chequeo de Level Up General
     hubo_level_up = False
-    
     while xp_actual >= xp_siguiente:
         xp_actual -= xp_siguiente 
         nivel += 1
@@ -198,9 +198,22 @@ def otorgar_xp(jugador_id, cantidad_xp):
         puntos_libres += 3 
         hubo_level_up = True
         
-    supabase.table("perfil_jugador").update({
-        "nivel": nivel, "xp_actual": int(xp_actual), "xp_siguiente_nivel": xp_siguiente, "puntos_atributo": puntos_libres 
-    }).eq("id", jugador_id).execute()
+    datos_a_actualizar = {
+        "nivel": nivel, 
+        "xp_actual": int(xp_actual), 
+        "xp_siguiente_nivel": xp_siguiente, 
+        "puntos_atributo": puntos_libres
+    }
+    
+    # 2. Inyección de XP Muscular Específica
+    if zona_muscular:
+        # Normalizamos el nombre de la columna (ej: 'pecho' -> 'exp_pecho')
+        columna_zona = f"exp_{zona_muscular.lower()}"
+        if columna_zona in perfil:
+            xp_zona_actual = perfil[columna_zona] or 0
+            datos_a_actualizar[columna_zona] = xp_zona_actual + cantidad_xp
+
+    supabase.table("perfil_jugador").update(datos_a_actualizar).eq("id", jugador_id).execute()
     
     return hubo_level_up, nivel
 
@@ -268,37 +281,59 @@ with col3:
 
 st.markdown("---")
 
-# --- Sección 2: Análisis Físico y Holograma SVG ---
-st.subheader("ANÁLISIS MUSCULAR AVANZADO")
+# --- Sección 2: Análisis Estructural y Escáner IA ---
+st.subheader("ANÁLISIS ESTRUCTURAL AVANZADO")
 
-tab_svg, tab_ia = st.tabs(["Holograma de XP", "Escáner del Sistema (IA)"])
+tab_svg, tab_ia = st.tabs(["Holograma de Progreso", "Escáner del Sistema (IA)"])
 
 with tab_svg:
-    exp_pecho = perfil.get('exp_pecho', 0)
-    exp_piernas = perfil.get('exp_piernas', 0)
+    # 1. Leer experiencia de las distintas zonas
+    META_MUSCULO = 1000.0
+    
+    xp_inte = perfil.get('exp_intelecto', 0)
+    xp_pecho = perfil.get('exp_pecho', 0)
+    xp_espal = perfil.get('exp_espalda', 0)
+    xp_core = perfil.get('exp_core', 0)
+    xp_pier = perfil.get('exp_piernas', 0)
 
-    color_pecho = "#00ffcc" if exp_pecho > 100 else "#004433"
-    color_piernas = "#00ffcc" if exp_piernas > 100 else "#004433"
+    # 2. Fórmula matemática de brillo: A más XP, mayor opacidad y brillo.
+    op_inte = min(0.2 + (xp_inte / META_MUSCULO), 1.0)
+    op_pecho = min(0.2 + (xp_pecho / META_MUSCULO), 1.0)
+    op_espal = min(0.2 + (xp_espal / META_MUSCULO), 1.0)
+    op_core = min(0.2 + (xp_core / META_MUSCULO), 1.0)
+    op_pier = min(0.2 + (xp_pier / META_MUSCULO), 1.0)
 
+    # 3. Diseño del Esqueleto Poligonal (Wireframe)
     svg_cuerpo = f"""
-    <svg viewBox="0 0 200 400" width="100%" height="300">
-      <path id="pecho" d="M 60 100 Q 100 120 140 100 Q 100 80 60 100" fill="{color_pecho}" opacity="0.8" />
-      <path id="piernas" d="M 80 200 L 80 350 M 120 200 L 120 350" stroke="{color_piernas}" stroke-width="20" opacity="0.8" />
-    </svg>
-    <style>
-        #pecho, #piernas {{
-            filter: drop-shadow(0px 0px 5px {color_pecho});
-            transition: fill 0.5s ease;
-        }}
-    </style>
+    <svg viewBox="0 0 200 400" width="100%" height="350" xmlns="http://www.w3.org/2000/svg">
+      <style>
+        .glow {{ stroke: #00ffff; stroke-width: 1.5; fill: #00ffcc; transition: all 1s ease; }}
+        #intelecto {{ opacity: {op_inte}; filter: drop-shadow(0 0 {op_inte * 10}px #00ffcc); }}
+        #pecho {{ opacity: {op_pecho}; filter: drop-shadow(0 0 {op_pecho * 10}px #00ffcc); }}
+        #espalda {{ opacity: {op_espal}; filter: drop-shadow(0 0 {op_espal * 10}px #00ffcc); }}
+        #core {{ opacity: {op_core}; filter: drop-shadow(0 0 {op_core * 10}px #00ffcc); }}
+        #piernas {{ opacity: {op_pier}; filter: drop-shadow(0 0 {op_pier * 10}px #00ffcc); }}
+      </style>
+      
+      <polygon id="intelecto" class="glow" points="90,10 110,10 115,35 100,50 85,35" />
+      
+      <polygon id="espalda" class="glow" points="55,55 145,55 135,90 125,65 75,65 65,90" />
+      <polygon id="espalda" class="glow" points="60,65 70,95 65,160 50,160 50,100" /> <polygon id="espalda" class="glow" points="140,65 130,95 135,160 150,160 150,100" /> <polygon id="pecho" class="glow" points="70,60 130,60 125,95 100,105 75,95" />
+      
+      <polygon id="core" class="glow" points="80,100 120,100 115,150 100,165 85,150" />
+      
+      <polygon id="piernas" class="glow" points="80,160 100,170 100,220 85,340 70,340 75,220" /> <polygon id="piernas" class="glow" points="120,160 100,170 100,220 115,340 130,340 125,220" /> </svg>
     """
-    col_svg1, col_svg2 = st.columns([1, 2])
-    with col_svg1:
-        st.write("**ZONA DE ENFOQUE**")
-        st.progress(min(exp_pecho / 500.0, 1.0), text=f"Pectoral: {exp_pecho}/500 XP")
-        st.progress(min(exp_piernas / 500.0, 1.0), text=f"Piernas: {exp_piernas}/500 XP")
-    with col_svg2:
-        # Se reemplaza components.html por markdown para evitar el aviso de obsolescencia
+    
+    col_barras, col_grafico = st.columns([1, 1])
+    with col_barras:
+        st.caption("DENSIDAD ESTRUCTURAL")
+        st.progress(min(xp_inte / META_MUSCULO, 1.0), text=f"Intelecto: {xp_inte} XP")
+        st.progress(min(xp_espal / META_MUSCULO, 1.0), text=f"Espalda: {xp_espal} XP")
+        st.progress(min(xp_pecho / META_MUSCULO, 1.0), text=f"Pecho: {xp_pecho} XP")
+        st.progress(min(xp_core / META_MUSCULO, 1.0), text=f"Core: {xp_core} XP")
+        st.progress(min(xp_pier / META_MUSCULO, 1.0), text=f"Piernas: {xp_pier} XP")
+    with col_grafico:
         st.markdown(svg_cuerpo, unsafe_allow_html=True)
 
 with tab_ia:
@@ -375,24 +410,20 @@ else:
                 col1, col2 = st.columns(2)
                 with col1:
                     if st.button("✅ Aceptar y Completar", key=f"comp_{mision['id']}", use_container_width=True):
-                        # 1. Buscar la XP que da esta misión en el diccionario
+                        # 1. Buscar la XP que da esta misión
                         res_dic = supabase.table("diccionario_misiones").select("xp_recompensa").eq("titulo", mision['titulo']).execute()
                         xp_ganada = res_dic.data[0]['xp_recompensa'] if res_dic.data else 20
                         
-                        # 2. Dar XP y chequear Level Up
-                        level_up, nuevo_nivel = otorgar_xp(perfil['id'], xp_ganada)
+                        # 2. ENVIAR LA XP A LA ZONA CORRESPONDIENTE
+                        zona_trabajada = mision.get('zona_muscular', None)
+                        if zona_trabajada == 'caminata': zona_trabajada = 'piernas' # La caminata sube piernas
                         
-                        # 3. Marcar como completada en la BD
+                        level_up, nuevo_nivel = otorgar_xp(perfil['id'], xp_ganada, zona_trabajada)
+                        
+                        # 3. Guardar como completada
                         supabase.table("misiones_diarias").update({"estado": "completada"}).eq("id", mision['id']).execute()
                         
-                        if level_up:
-                            st.audio("level_up.mp3", autoplay=True)
-                            st.balloons()
-                            st.toast(f"¡SUBIDA DE NIVEL! Ganaste +{xp_ganada} XP.")
-                        else:
-                            st.toast(f"Misión Cumplida. +{xp_ganada} XP añadida a tu barra.")
-                            
-                        st.rerun() # Recarga la app para que desaparezca la misión
+                        st.rerun() # Obliga a la app a recargar y mostrar los gráficos llenos
                         
                 with col2:
                     if st.button("❌ Rechazar", key=f"rech_{mision['id']}", use_container_width=True):
