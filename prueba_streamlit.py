@@ -196,7 +196,7 @@ def analizar_fisico(imagen, peso_actual):
     imagen.thumbnail((800, 800))
     
     # Invocamos al modelo Flash nativo de Gemini (rápido y con visión)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.5-flash')
     
     prompt = f"""
     Actúa estrictamente como un Sistema RPG de entrenamiento físico. 
