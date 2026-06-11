@@ -6,8 +6,10 @@ import requests
 import re
 import random
 from datetime import timedelta
-import google.generativeai as genai
 from PIL import Image
+import base64
+from io import BytesIO
+from groq import Groq
 
 # -----------------------------------------------------------------------------
 # CONFIGURACIÓN VISUAL
@@ -37,8 +39,8 @@ def init_connection() -> Client:
 
 supabase = init_connection()
 
-# Configurar Gemini
-genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+# Configurar el cliente de Groq (Extrae la llave directamente de los secrets)
+groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 # -----------------------------------------------------------------------------
 # LÓGICA DE DATOS
@@ -193,7 +195,11 @@ def otorgar_xp(jugador_id, cantidad_xp):
     return hubo_level_up, nivel
 
 def analizar_fisico(imagen, peso_actual):
-    model = genai.GenerativeModel('gemini-2.0-flash')
+    # Convertir la imagen a Base64 para que la API de Groq la pueda interpretar
+    buffered = BytesIO()
+    imagen.convert('RGB').save(buffered, format="JPEG")
+    base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
+    
     prompt = f"""
     Actúa como el 'Sistema' de Solo Leveling evaluando al Jugador. 
     El Jugador acaba de subir una actualización visual de su torso. 
@@ -203,8 +209,26 @@ def analizar_fisico(imagen, peso_actual):
     2. Da una advertencia constructiva sobre qué fortalecer para lograr las 25 flexiones soportando sus {peso_actual} kg.
     3. Cierra con una frase épica de nivel RPG.
     """
-    response = model.generate_content([prompt, imagen])
-    return response.text
+    
+    # Petición a LLaMA 3.2 Vision alojado en los LPU de Groq
+    response = groq_client.chat.completions.create(
+        model="llama-3.2-11b-vision-preview",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{base64_image}",
+                        },
+                    },
+                ],
+            }
+        ],
+    )
+    return response.choices[0].message.content
 
 # -----------------------------------------------------------------------------
 # INTERFAZ DE USUARIO (UI)
@@ -252,7 +276,6 @@ st.markdown("---")
 # --- Sección 2: Análisis Físico y Holograma SVG ---
 st.subheader("ANÁLISIS MUSCULAR AVANZADO")
 
-# Pestañas para dividir la Interfaz
 tab_svg, tab_ia = st.tabs(["Holograma de XP", "Escáner del Sistema (IA)"])
 
 with tab_svg:
@@ -288,7 +311,7 @@ with tab_ia:
     peso_input = st.number_input("Peso actual (kg):", min_value=50.0, max_value=150.0, value=102.0)
     
     if foto_subida and st.button("👁️ Iniciar Escaneo"):
-        with st.spinner("El Sistema está analizando tu composición..."):
+        with st.spinner("El Sistema está analizando tu composición a través de los servidores de Groq..."):
             img = Image.open(foto_subida)
             feedback = analizar_fisico(img, peso_input)
             st.markdown(f"> *{feedback}*")
@@ -342,7 +365,6 @@ else:
             
             if mision['estado'] == 'pendiente':
                 if st.button(f"Completar Misión", key=mision['id']):
-                    # Aquí irá tu lógica de completado
                     st.toast("XP guardada.")
             else:
                 st.success("Misión Completada")
