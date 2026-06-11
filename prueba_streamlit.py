@@ -82,24 +82,36 @@ def generar_misiones_del_dia(jugador_id):
     ayer = (hoy - timedelta(days=1)).isoformat()
     hoy_str = hoy.isoformat()
     
-    res_ayer = supabase.table("misiones_diarias")\
-        .select("zona_muscular")\
-        .eq("jugador_id", jugador_id)\
-        .eq("fecha", ayer)\
-        .execute()
+    perfil = obtener_perfil()
+    semana_actual = perfil.get('semana_actual', 1)
+    barra_desbloqueada = perfil.get('barra_calistenia_desbloqueada', False)
     
-    zonas_fatigadas = [m['zona_muscular'] for m in res_ayer.data if m['zona_muscular'] not in ['caminata', 'general', None]]
+    # Consultar fatiga muscular de ayer
+    res_ayer = supabase.table("misiones_diarias").select("zona_muscular").eq("jugador_id", jugador_id).eq("fecha", ayer).execute()
+    zonas_fatigadas = [m['zona_muscular'] for m in res_ayer.data if m['zona_muscular'] not in ['caminata', 'general', 'intelecto', None]]
+    
+    # Traer catálogo
     res_catalogo = supabase.table("diccionario_misiones").select("*").execute()
     catalogo = res_catalogo.data
     misiones_asignadas = []
     
     for mision in catalogo:
+        tit = mision['titulo']
+        
+        # FILTRO DE CAMPAÑA: Bloquear misiones de semanas futuras/pasadas
+        if "Semana 1" in tit and semana_actual != 1: continue
+        if "Semana 2" in tit and semana_actual != 2: continue
+        if "Semana 3" in tit and semana_actual != 3: continue
+        if "Suspensión" in tit and not barra_desbloqueada: continue
+        
+        # Filtro de fatiga
         if mision.get('zona_muscular') in zonas_fatigadas:
             continue
             
         probabilidad = float(mision['probabilidad_aparicion'])
         if random.random() <= probabilidad:
             misiones_asignadas.append(mision)
+            # Bloqueamos grupos pesados para no sobreentrenar
             if mision.get('zona_muscular') in ['pecho', 'espalda', 'piernas', 'core']:
                 zonas_fatigadas.extend(['pecho', 'espalda', 'piernas', 'core'])
 
@@ -111,7 +123,8 @@ def generar_misiones_del_dia(jugador_id):
             "categoria": m['categoria'],
             "rango": m['rango'],
             "zona_muscular": m.get('zona_muscular', 'general'),
-            "fecha": hoy_str
+            "fecha": hoy_str,
+            "estado": "pendiente" # Aseguramos que nazcan pendientes
         }).execute()
         
     return misiones_asignadas
@@ -328,27 +341,70 @@ if st.button("📡 Sincronizar Radar de YouTube"):
 
 st.markdown("---")
 
-# --- Sección 4: Misiones Diarias ---
-st.subheader("QUEST INFO")
+# --- Sección 4: Misiones Diarias (QUEST BOARD) ---
+st.subheader("📜 QUEST BOARD")
 st.caption("DAILY QUEST - SURVIVE AND LEVEL UP")
 
 misiones_hoy = obtener_misiones_hoy(perfil['id'])
 
 if not misiones_hoy:
     st.info("El Sistema aún no ha asignado las misiones de hoy.")
-    if st.button("🎲 Extraer Misiones del Sistema"):
+    if st.button("🎲 Extraer Misiones del Sistema", use_container_width=True):
         with st.spinner("Calculando fatiga y probabilidades..."):
             generar_misiones_del_dia(perfil['id'])
             st.rerun()
 else:
-    for mision in misiones_hoy:
-        with st.container():
-            st.markdown(f"**{mision['titulo']}** [{mision['rango']}] - Zona: {mision.get('zona_muscular', 'N/A').upper()}")
-            st.write(mision['descripcion'])
-            
-            if mision['estado'] == 'pendiente':
-                if st.button(f"Completar Misión", key=mision['id']):
-                    st.toast("XP guardada.")
-            else:
+    # Separar en pendientes y completadas para mejorar la UI
+    pendientes = [m for m in misiones_hoy if m.get('estado', 'pendiente') == 'pendiente']
+    completadas = [m for m in misiones_hoy if m.get('estado', '') == 'completada']
+    
+    # 1. RENDERIZAR MISIONES PENDIENTES
+    if pendientes:
+        st.write("### ⚠️ MISIONES ACTIVAS")
+        for mision in pendientes:
+            # st.container(border=True) crea una tarjeta visualmente atractiva
+            with st.container(border=True):
+                # El Rango [D], [C]... destaca en el título
+                st.markdown(f"#### [{mision['rango']}] {mision['titulo']}")
+                st.caption(f"ZONA DE IMPACTO: **{mision.get('zona_muscular', 'N/A').upper()}**")
+                st.write(mision['descripcion'])
+                
+                st.divider()
+                
+                # Botones de Acción (Aceptar vs Rechazar)
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("✅ Aceptar y Completar", key=f"comp_{mision['id']}", use_container_width=True):
+                        # 1. Buscar la XP que da esta misión en el diccionario
+                        res_dic = supabase.table("diccionario_misiones").select("xp_recompensa").eq("titulo", mision['titulo']).execute()
+                        xp_ganada = res_dic.data[0]['xp_recompensa'] if res_dic.data else 20
+                        
+                        # 2. Dar XP y chequear Level Up
+                        level_up, nuevo_nivel = otorgar_xp(perfil['id'], xp_ganada)
+                        
+                        # 3. Marcar como completada en la BD
+                        supabase.table("misiones_diarias").update({"estado": "completada"}).eq("id", mision['id']).execute()
+                        
+                        if level_up:
+                            st.audio("level_up.mp3", autoplay=True)
+                            st.balloons()
+                            st.toast(f"¡SUBIDA DE NIVEL! Ganaste +{xp_ganada} XP.")
+                        else:
+                            st.toast(f"Misión Cumplida. +{xp_ganada} XP añadida a tu barra.")
+                            
+                        st.rerun() # Recarga la app para que desaparezca la misión
+                        
+                with col2:
+                    if st.button("❌ Rechazar", key=f"rech_{mision['id']}", use_container_width=True):
+                        # Eliminamos la misión de hoy si no la vas a hacer
+                        supabase.table("misiones_diarias").delete().eq("id", mision['id']).execute()
+                        st.toast("Misión rechazada y eliminada del panel.")
+                        st.rerun()
+                        
+    # 2. RENDERIZAR MISIONES COMPLETADAS (Solo un registro visual)
+    if completadas:
+        st.write("### 🏆 REGISTRO DE VICTORIAS HOY")
+        for mision in completadas:
+            with st.container(border=True):
+                st.markdown(f"~~[{mision['rango']}] {mision['titulo']}~~")
                 st.success("Misión Completada")
-            st.divider()
