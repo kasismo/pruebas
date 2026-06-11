@@ -215,7 +215,7 @@ def analizar_fisico(imagen, peso_actual):
     
     # 3. Petición a LLaMA 3.2 Vision en Groq
     response = groq_client.chat.completions.create(
-        model="llama-3.2-11b-vision-instruct",
+        model="llama-3.2-11b-vision",
         messages=[
             {
                 "role": "user",
