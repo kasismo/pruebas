@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 from supabase import create_client, Client
 import datetime
 import requests
@@ -307,7 +306,7 @@ with tab_svg:
         st.progress(min(exp_pecho / 500.0, 1.0), text=f"Pectoral: {exp_pecho}/500 XP")
         st.progress(min(exp_piernas / 500.0, 1.0), text=f"Piernas: {exp_piernas}/500 XP")
     with col_svg2:
-        components.html(svg_cuerpo, height=350)
+        st.markdown(svg_cuerpo, unsafe_allow_html=True)
 
 with tab_ia:
     st.write("Sube una actualización visual para que el Sistema recalcule tus umbrales de esfuerzo.")
