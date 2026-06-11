@@ -5,10 +5,8 @@ import requests
 import re
 import random
 from datetime import timedelta
+import google.generativeai as genai
 from PIL import Image
-import base64
-from io import BytesIO
-from groq import Groq
 
 # -----------------------------------------------------------------------------
 # CONFIGURACIÓN VISUAL
@@ -38,8 +36,8 @@ def init_connection() -> Client:
 
 supabase = init_connection()
 
-# Configurar el cliente de Groq (Extrae la llave directamente de los secrets)
-groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+# Configurar Gemini (Asegúrate de tener GEMINI_API_KEY en tus secrets)
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
 # -----------------------------------------------------------------------------
 # LÓGICA DE DATOS
@@ -194,44 +192,25 @@ def otorgar_xp(jugador_id, cantidad_xp):
     return hubo_level_up, nivel
 
 def analizar_fisico(imagen, peso_actual):
-    # 1. Compresión del peso del archivo
-    # Redimensionamos la imagen para que Groq no tire "Bad Request" por tamaño
-    imagen.thumbnail((800, 800)) 
-    buffered = BytesIO()
-    # Guardamos con formato JPEG y compresión del 85%
-    imagen.convert('RGB').save(buffered, format="JPEG", quality=85) 
-    base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
+    # Compresión preventiva de la imagen para optimizar la petición
+    imagen.thumbnail((800, 800))
     
-    # 2. Prompt rediseñado para esquivar los filtros de seguridad de LLaMA
+    # Invocamos al modelo Flash nativo de Gemini (rápido y con visión)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    
     prompt = f"""
     Actúa estrictamente como un Sistema RPG de entrenamiento físico. 
     Analiza esta imagen de referencia deportiva del Jugador.
     El usuario pesa {peso_actual} kg y está entrenando calistenia para lograr 25 flexiones de brazos consecutivas.
     Brinda un breve reporte motivacional estilo videojuego que incluya:
-    1. Observación de la musculatura visible enfocada en el rendimiento deportivo (pecho, hombros, core). No des diagnósticos médicos.
+    1. Observación de la musculatura visible enfocada en el rendimiento deportivo (pecho, hombros, core).
     2. Un consejo técnico y constructivo sobre qué cadena muscular priorizar para levantar {peso_actual} kg con facilidad en flexiones.
     3. Cierra con una frase épica del Sistema.
     """
     
-    # 3. Petición a LLaMA 3.2 Vision en Groq
-    response = groq_client.chat.completions.create(
-        model="llama-3.2-11b-vision",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{base64_image}",
-                        },
-                    },
-                ],
-            }
-        ],
-    )
-    return response.choices[0].message.content
+    # Con Gemini, enviamos la imagen directamente en la lista junto al texto
+    response = model.generate_content([prompt, imagen])
+    return response.text
 
 # -----------------------------------------------------------------------------
 # INTERFAZ DE USUARIO (UI)
@@ -306,6 +285,7 @@ with tab_svg:
         st.progress(min(exp_pecho / 500.0, 1.0), text=f"Pectoral: {exp_pecho}/500 XP")
         st.progress(min(exp_piernas / 500.0, 1.0), text=f"Piernas: {exp_piernas}/500 XP")
     with col_svg2:
+        # Se reemplaza components.html por markdown para evitar el aviso de obsolescencia
         st.markdown(svg_cuerpo, unsafe_allow_html=True)
 
 with tab_ia:
@@ -314,7 +294,7 @@ with tab_ia:
     peso_input = st.number_input("Peso actual (kg):", min_value=50.0, max_value=150.0, value=102.0)
     
     if foto_subida and st.button("👁️ Iniciar Escaneo"):
-        with st.spinner("El Sistema está analizando tu composición a través de los servidores de Groq..."):
+        with st.spinner("El Sistema está analizando tu composición a través de Gemini Vision..."):
             img = Image.open(foto_subida)
             feedback = analizar_fisico(img, peso_input)
             st.markdown(f"> *{feedback}*")
