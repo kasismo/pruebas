@@ -193,7 +193,7 @@ def otorgar_xp(jugador_id, cantidad_xp):
     return hubo_level_up, nivel
 
 def analizar_fisico(imagen, peso_actual):
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.0-flash')
     prompt = f"""
     Actúa como el 'Sistema' de Solo Leveling evaluando al Jugador. 
     El Jugador acaba de subir una actualización visual de su torso. 
