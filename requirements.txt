@@ -1,4 +1,5 @@
 streamlit
 supabase
+google-generativeai>=0.5.2
+pillow
 requests
-google-generativeai
