@@ -86,35 +86,69 @@ def generar_misiones_del_dia(jugador_id):
     semana_actual = perfil.get('semana_actual', 1)
     barra_desbloqueada = perfil.get('barra_calistenia_desbloqueada', False)
     
-    # Consultar fatiga muscular de ayer
-    res_ayer = supabase.table("misiones_diarias").select("zona_muscular").eq("jugador_id", jugador_id).eq("fecha", ayer).execute()
-    zonas_fatigadas = [m['zona_muscular'] for m in res_ayer.data if m['zona_muscular'] not in ['caminata', 'general', 'intelecto', None]]
+    # 1. Consultar el historial exacto de ayer
+    res_ayer = supabase.table("misiones_diarias").select("*").eq("jugador_id", jugador_id).eq("fecha", ayer).execute()
     
-    # Traer catálogo
+    zonas_fatigadas = []
+    hizo_caminata_ayer = False
+    
+    for m in res_ayer.data:
+        zona = m.get('zona_muscular')
+        # Anotamos qué músculos se fatigaron ayer
+        if zona in ['pecho', 'espalda', 'piernas', 'core', 'general']:
+            zonas_fatigadas.append(zona)
+        # Verificamos si ayer hubo caminata
+        if zona == 'caminata':
+            hizo_caminata_ayer = True
+            
+    # 2. Traer catálogo de misiones
     res_catalogo = supabase.table("diccionario_misiones").select("*").execute()
     catalogo = res_catalogo.data
     misiones_asignadas = []
     
+    entrenamiento_pesado_asignado = False # El candado de seguridad: Solo 1 rutina física diaria
+    
     for mision in catalogo:
         tit = mision['titulo']
+        zona = mision.get('zona_muscular', 'general')
         
-        # FILTRO DE CAMPAÑA: Bloquear misiones de semanas futuras/pasadas
-        if "Semana 1" in tit and semana_actual != 1: continue
-        if "Semana 2" in tit and semana_actual != 2: continue
-        if "Semana 3" in tit and semana_actual != 3: continue
+        # --- RAMA 1: INTELECTO Y UNIVERSIDAD ---
+        # El estudio no tiene restricciones de fatiga física.
+        if zona == 'intelecto':
+            probabilidad = float(mision['probabilidad_aparicion'])
+            if random.random() <= probabilidad:
+                misiones_asignadas.append(mision)
+            continue
+            
+        # --- RAMA 2: CAMPAÑA DE CAMINATA ---
+        if zona == 'caminata':
+            # Filtro de Semanas
+            if "Semana 1" in tit and semana_actual != 1: continue
+            if "Semana 2" in tit and semana_actual != 2: continue
+            if "Semana 3" in tit and semana_actual != 3: continue
+            
+            # Filtro de Descanso (Cada 2 días en Semana 1 y 2)
+            if semana_actual in [1, 2] and hizo_caminata_ayer:
+                continue 
+                
+            misiones_asignadas.append(mision)
+            continue
+            
+        # --- RAMA 3: ENTRENAMIENTO FÍSICO PESADO ---
         if "Suspensión" in tit and not barra_desbloqueada: continue
         
-        # Filtro de fatiga
-        if mision.get('zona_muscular') in zonas_fatigadas:
-            continue
+        if zona in zonas_fatigadas:
+            continue # Descartada: Músculo en recuperación
+            
+        if entrenamiento_pesado_asignado:
+            continue # Descartada: Ya tienes una misión física hoy
             
         probabilidad = float(mision['probabilidad_aparicion'])
         if random.random() <= probabilidad:
             misiones_asignadas.append(mision)
-            # Bloqueamos grupos pesados para no sobreentrenar
-            if mision.get('zona_muscular') in ['pecho', 'espalda', 'piernas', 'core']:
-                zonas_fatigadas.extend(['pecho', 'espalda', 'piernas', 'core'])
+            entrenamiento_pesado_asignado = True # Cerramos el candado por hoy
 
+    # 3. Inserción en la Base de Datos
     for m in misiones_asignadas:
         supabase.table("misiones_diarias").insert({
             "jugador_id": jugador_id,
@@ -124,7 +158,7 @@ def generar_misiones_del_dia(jugador_id):
             "rango": m['rango'],
             "zona_muscular": m.get('zona_muscular', 'general'),
             "fecha": hoy_str,
-            "estado": "pendiente" # Aseguramos que nazcan pendientes
+            "estado": "pendiente" 
         }).execute()
         
     return misiones_asignadas
