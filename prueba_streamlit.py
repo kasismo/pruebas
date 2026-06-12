@@ -26,7 +26,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Inicialización de la memoria a corto plazo
+# Inicialización de la memoria a corto plazo del panel
 if 'play_level_up' not in st.session_state:
     st.session_state['play_level_up'] = False
 if 'mision_activa' not in st.session_state:
@@ -45,10 +45,11 @@ def init_connection() -> Client:
 
 supabase = init_connection()
 
+# Configuración estricta de tu versión de Gemini
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
 # -----------------------------------------------------------------------------
-# LÓGICA DE DATOS Y MOTORES DE IA
+# LÓGICA DE DATOS Y MOTORES DE INTELIGENCIA
 # -----------------------------------------------------------------------------
 def obtener_perfil():
     respuesta = supabase.table("perfil_jugador").select("*").limit(1).execute()
@@ -94,6 +95,7 @@ def generar_misiones_del_dia(jugador_id):
     semana_actual = perfil.get('semana_actual', 1)
     barra_desbloqueada = perfil.get('barra_calistenia_desbloqueada', False)
     
+    # Smart Scheduler: Consultar historial de fatiga de ayer
     res_ayer = supabase.table("misiones_diarias").select("*").eq("jugador_id", jugador_id).eq("fecha", ayer).execute()
     
     zonas_fatigadas = []
@@ -116,11 +118,13 @@ def generar_misiones_del_dia(jugador_id):
         tit = mision['titulo']
         zona = mision.get('zona_muscular', 'general')
         
+        # Rama Intelectual
         if zona == 'intelecto':
             if random.random() <= float(mision['probabilidad_aparicion']):
                 misiones_asignadas.append(mision)
             continue
             
+        # Rama de Caminatas Intercaladas
         if zona == 'caminata':
             if "Semana 1" in tit and semana_actual != 1: continue
             if "Semana 2" in tit and semana_actual != 2: continue
@@ -132,8 +136,9 @@ def generar_misiones_del_dia(jugador_id):
             misiones_asignadas.append(mision)
             continue
             
+        # Rama Física Pesada
         if "Suspensión" in tit and not barra_desbloqueada: continue
-        if zona in zonas_fatigadas: continue
+        if zona in zones_fatigadas: continue
         if entrenamiento_pesado_asignado: continue
             
         if random.random() <= float(mision['probabilidad_aparicion']):
@@ -153,32 +158,6 @@ def generar_misiones_del_dia(jugador_id):
         }).execute()
         
     return misiones_asignadas
-
-def aplicar_modificador_esfuerzo(texto, esfuerzo):
-    mult = 1.0
-    if esfuerzo == 'Muy Fácil': mult = 0.7
-    elif esfuerzo == 'Un poco fácil': mult = 0.85
-    elif esfuerzo == 'Adecuada': mult = 1.0
-    elif esfuerzo == 'Un poco compleja': mult = 1.15
-    elif esfuerzo == 'Compleja': mult = 1.30
-    
-    # Modificar dinámicamente las repeticiones (x12 -> x15)
-    def rep_replacer(match):
-        val = int(match.group(1))
-        new_val = max(1, int(val * mult))
-        return f"x{new_val}"
-        
-    texto_mod = re.sub(r'x(\d+)', rep_replacer, texto)
-    
-    # Modificar dinámicamente los tiempos (00:30 -> 00:39)
-    def time_replacer(match):
-        segs = int(match.group(1))
-        new_segs = max(5, int(segs * mult))
-        new_segs = min(new_segs, 59) # Evitamos que salte a formato minuto para mantener estética
-        return f"00:{new_segs:02d}"
-        
-    texto_mod = re.sub(r'00:(\d{2})', time_replacer, texto_mod)
-    return texto_mod
 
 def obtener_horas_totales_youtube(jugador_id):
     respuesta = supabase.table("historial_youtube").select("duracion_horas").eq("jugador_id", jugador_id).execute()
@@ -282,18 +261,16 @@ def analizar_fisico(imagen, peso_actual):
     return response.text
 
 # -----------------------------------------------------------------------------
-# INTERFAZ DE USUARIO (UI)
+# INTERFAZ DE USUARIO (UI CORES)
 # -----------------------------------------------------------------------------
-st.title("STATUS PANEL")
-st.markdown("---")
+perfil = obtener_perfil()
+verificar_progreso_campana(perfil['id'], perfil)
 
-if st.session_state.get('play_level_up', False):
+# --- SISTEMA DE ALARMA: LEVEL UP ---
+if st.session_state['play_level_up']:
     st.audio("level_up.mp3", autoplay=True)
     st.balloons()
     st.session_state['play_level_up'] = False
-
-perfil = obtener_perfil()
-verificar_progreso_campana(perfil['id'], perfil)
 
 # --- Sección 1: Estadísticas Base ---
 col1, col2, col3 = st.columns([1, 2, 1])
@@ -423,31 +400,24 @@ if st.button("📡 Sincronizar Radar de YouTube"):
 
 st.markdown("---")
 
-# --- Sección 4: Misiones Diarias (QUEST BOARD & COMBAT MODE) ---
+# --- Sección 4: Misiones Diarias (QUEST BOARD & EVOLUTION PROTOCOL) ---
 mision_activa = st.session_state.get('mision_activa')
 
 if mision_activa:
-    # --- VENTANA DE MISIÓN ACTIVA (FOCUS MODE) ---
+    # ==========================================
+    # ⚔️ MODO DE COMBATE ACTIVO (VENTANA PRINCIPAL DE MISIÓN)
+    # ==========================================
     st.subheader("⚔️ MODO DE COMBATE ACTIVO")
-    
-    esfuerzo_seleccionado = st.select_slider(
-        "Ajuste Táctico (Modificador de Rutina en vivo):",
-        options=['Muy Fácil', 'Un poco fácil', 'Adecuada', 'Un poco compleja', 'Compleja'],
-        value='Adecuada'
-    )
-    
-    texto_modificado = aplicar_modificador_esfuerzo(mision_activa['descripcion'], esfuerzo_seleccionado)
     
     with st.container(border=True):
         st.markdown(f"### {mision_activa['titulo']}")
         st.caption(f"ZONA DE IMPACTO: **{mision_activa.get('zona_muscular', 'N/A').upper()}**")
-        st.markdown(f"**OBJETIVOS ADAPTADOS ({esfuerzo_seleccionado.upper()})**")
-        st.write(texto_modificado)
+        st.write(mision_activa['descripcion'])
     
-    # Cronómetro en vivo diseñado en JS
+    # Cronómetro holográfico inyectado en la pantalla vía JavaScript
     timer_html = """
     <div style="background-color: #0e1117; padding: 15px; border-radius: 10px; text-align: center; border: 2px solid #E50914;">
-        <p style="color: #888; font-family: sans-serif; margin: 0 0 5px 0; font-weight: bold;">TIEMPO DE EJECUCIÓN</p>
+        <p style="color: #888; font-family: sans-serif; margin: 0 0 5px 0; font-weight: bold;">TIEMPO DE ENFRENTAMIENTO</p>
         <div id="stopwatch" style="font-size: 3.5rem; font-family: monospace; color: #00ffcc; font-weight: bold;">00:00:00</div>
     </div>
     <script>
@@ -462,37 +432,86 @@ if mision_activa:
     </script>
     """
     components.html(timer_html, height=130)
+    st.divider()
+    
+    # DESLIZADOR RETROSPECTIVO DE EVALUACIÓN POST-MISIÓN
+    esfuerzo_seleccionado = st.select_slider(
+        "📊 Evaluación del Esfuerzo (Completa la tarea y selecciona cómo se sintió para mutar el Sistema):",
+        options=['Muy Fácil', 'Un poco fácil', 'Adecuada', 'Un poco compleja', 'Compleja'],
+        value='Adecuada'
+    )
     
     col_fin1, col_fin2 = st.columns(2)
     with col_fin1:
-        if st.button("🛑 FINALIZAR Y RECLAMAR XP", use_container_width=True):
+        if st.button("🛑 FINALIZAR Y EVOLUCIONAR", use_container_width=True):
             tiempo_final = datetime.datetime.now()
             segundos_tardados = int((tiempo_final - st.session_state['hora_inicio_mision']).total_seconds())
             
-            # Cálculo de Multiplicador de Recompensas
-            res_dic = supabase.table("diccionario_misiones").select("xp_recompensa").eq("titulo", mision_activa['titulo']).execute()
-            base_xp = res_dic.data[0]['xp_recompensa'] if res_dic.data else 20
+            # 1. Traer datos base actuales del Diccionario de Misiones
+            res_dic = supabase.table("diccionario_misiones").select("*").eq("titulo", mision_activa['titulo']).execute()
             
-            mult_xp = {'Muy Fácil': 0.7, 'Un poco fácil': 0.85, 'Adecuada': 1.0, 'Un poco compleja': 1.15, 'Compleja': 1.3}
-            xp_final = int(base_xp * mult_xp[esfuerzo_seleccionado])
-            
-            zona_trabajada = mision_activa.get('zona_muscular', None)
-            if zona_trabajada == 'caminata': zona_trabajada = 'piernas'
-            
-            level_up, nuevo_nivel = otorgar_xp(perfil['id'], xp_final, zona_trabajada)
-            
-            supabase.table("misiones_diarias").update({
-                "estado": "completada",
-                "tiempo_segundos": segundos_tardados,
-                "nivel_esfuerzo": esfuerzo_seleccionado
-            }).eq("id", mision_activa['id']).execute()
-            
-            if level_up:
-                st.session_state['play_level_up'] = True
-                st.toast(f"¡SUBIDA DE NIVEL! Ganaste {xp_final} XP en {segundos_tardados} seg.")
-            else:
-                st.toast(f"Misión Cumplida. +{xp_final} XP en {segundos_tardados} seg.")
-            
+            if res_dic.data:
+                mision_base = res_dic.data[0]
+                desc_original = mision_base['descripcion']
+                xp_base_original = mision_base['xp_recompensa']
+                
+                # Definición de Multiplicadores Permanentes y de Sesión
+                mult_texto_perm = {'Muy Fácil': 1.25, 'Un poco fácil': 1.10, 'Adecuada': 1.0, 'Un poco compleja': 1.0, 'Compleja': 0.85}
+                mult_xp_perm = {'Muy Fácil': 1.15, 'Un poco fácil': 1.05, 'Adecuada': 1.0, 'Un poco compleja': 1.0, 'Compleja': 0.95}
+                mult_xp_hoy = {'Muy Fácil': 1.0, 'Un poco fácil': 1.0, 'Adecuada': 1.0, 'Un poco compleja': 1.10, 'Compleja': 1.20}
+                
+                m_texto = mult_texto_perm[esfuerzo_seleccionado]
+                m_xp = mult_xp_perm[esfuerzo_seleccionado]
+                
+                # RECALIBRACIÓN MEDIANTE REGEX DE TEXTO (Afecta repeticiones, minutos y segundos)
+                def rep_reps(match):
+                    val = int(match.group(1))
+                    return f"x{max(1, int(val * m_texto))}"
+                desc_evolucionada = re.sub(r'x(\d+)', rep_reps, desc_original)
+                
+                def rep_mins(match):
+                    val = int(match.group(1))
+                    return f"{max(5, int(val * m_texto))} minutos"
+                desc_evolucionada = re.sub(r'(\d+)\s*minutos', rep_mins, desc_evolucionada)
+                
+                def rep_times(match):
+                    segs = int(match.group(1))
+                    new_segs = min(max(5, int(segs * m_texto)), 59)
+                    return f"00:{new_segs:02d}"
+                desc_evolucionada = re.sub(r'00:(\d{2})', rep_times, desc_evolucionada)
+                
+                xp_base_evolucionada = max(5, int(xp_base_original * m_xp))
+                
+                # 2. EJECUTAR EL UPDATE PERMANENTE (SOBRECARGA PROGRESIVA EN BD)
+                if esfuerzo_seleccionado != 'Adecuada':
+                    supabase.table("diccionario_misiones").update({
+                        "descripcion": desc_evolucionada,
+                        "xp_recompensa": xp_base_evolucionada
+                    }).eq("titulo", mision_activa['titulo']).execute()
+                    st.toast(f"✨ ¡SISTEMA RECALIBRADO! La misión ha evolucionado de forma permanente.")
+                
+                # 3. Otorgar Recompensas de hoy
+                xp_final_hoy = int(xp_base_original * mult_xp_hoy[esfuerzo_seleccionado])
+                
+                zona_trabajada = mision_activa.get('zona_muscular', None)
+                if zona_trabajada == 'caminata': zona_trabajada = 'piernas'
+                
+                level_up, nuevo_nivel = otorgar_xp(perfil['id'], xp_final_hoy, zona_trabajada)
+                
+                # 4. Cerrar registro diario
+                supabase.table("misiones_diarias").update({
+                    "estado": "completada",
+                    "tiempo_segundos": segundos_tardados,
+                    "nivel_esfuerzo": esfuerzo_seleccionado
+                }).eq("id", mision_activa['id']).execute()
+                
+                if level_up:
+                    st.session_state['play_level_up'] = True
+                    st.toast(f"🚀 ¡LEVEL UP! +{xp_final_hoy} XP conseguidos.")
+                else:
+                    st.toast(f"✅ Misión finalizada. Reclamados +{xp_final_hoy} XP.")
+                    
+            # Resetear estados de combate
             st.session_state['mision_activa'] = None
             st.session_state['hora_inicio_mision'] = None
             st.rerun()
@@ -504,7 +523,9 @@ if mision_activa:
             st.rerun()
 
 else:
-    # --- TABLERO NORMAL DE MISIONES ---
+    # ==========================================
+    # 📜 TABLERO NORMAL (QUEST BOARD PRINCIPAL)
+    # ==========================================
     st.subheader("📜 QUEST BOARD")
     st.caption("DAILY QUEST - SURVIVE AND LEVEL UP")
 
