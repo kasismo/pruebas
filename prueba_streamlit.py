@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 from supabase import create_client, Client
 import datetime
 import requests
@@ -9,7 +10,7 @@ import google.generativeai as genai
 from PIL import Image
 
 # -----------------------------------------------------------------------------
-# CONFIGURACIÓN VISUAL
+# CONFIGURACIÓN VISUAL Y MEMORIA DEL SISTEMA
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="Solo Leveling: System",
@@ -25,6 +26,14 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# Inicialización de la memoria a corto plazo
+if 'play_level_up' not in st.session_state:
+    st.session_state['play_level_up'] = False
+if 'mision_activa' not in st.session_state:
+    st.session_state['mision_activa'] = None
+if 'hora_inicio_mision' not in st.session_state:
+    st.session_state['hora_inicio_mision'] = None
+
 # -----------------------------------------------------------------------------
 # CONEXIÓN A BASES DE DATOS Y APIs
 # -----------------------------------------------------------------------------
@@ -36,11 +45,10 @@ def init_connection() -> Client:
 
 supabase = init_connection()
 
-# Configurar Gemini (Asegúrate de tener GEMINI_API_KEY en tus secrets)
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
 # -----------------------------------------------------------------------------
-# LÓGICA DE DATOS
+# LÓGICA DE DATOS Y MOTORES DE IA
 # -----------------------------------------------------------------------------
 def obtener_perfil():
     respuesta = supabase.table("perfil_jugador").select("*").limit(1).execute()
@@ -86,7 +94,6 @@ def generar_misiones_del_dia(jugador_id):
     semana_actual = perfil.get('semana_actual', 1)
     barra_desbloqueada = perfil.get('barra_calistenia_desbloqueada', False)
     
-    # 1. Consultar el historial exacto de ayer
     res_ayer = supabase.table("misiones_diarias").select("*").eq("jugador_id", jugador_id).eq("fecha", ayer).execute()
     
     zonas_fatigadas = []
@@ -94,61 +101,45 @@ def generar_misiones_del_dia(jugador_id):
     
     for m in res_ayer.data:
         zona = m.get('zona_muscular')
-        # Anotamos qué músculos se fatigaron ayer
         if zona in ['pecho', 'espalda', 'piernas', 'core', 'general']:
             zonas_fatigadas.append(zona)
-        # Verificamos si ayer hubo caminata
         if zona == 'caminata':
             hizo_caminata_ayer = True
             
-    # 2. Traer catálogo de misiones
     res_catalogo = supabase.table("diccionario_misiones").select("*").execute()
     catalogo = res_catalogo.data
     misiones_asignadas = []
     
-    entrenamiento_pesado_asignado = False # El candado de seguridad: Solo 1 rutina física diaria
+    entrenamiento_pesado_asignado = False
     
     for mision in catalogo:
         tit = mision['titulo']
         zona = mision.get('zona_muscular', 'general')
         
-        # --- RAMA 1: INTELECTO Y UNIVERSIDAD ---
-        # El estudio no tiene restricciones de fatiga física.
         if zona == 'intelecto':
-            probabilidad = float(mision['probabilidad_aparicion'])
-            if random.random() <= probabilidad:
+            if random.random() <= float(mision['probabilidad_aparicion']):
                 misiones_asignadas.append(mision)
             continue
             
-        # --- RAMA 2: CAMPAÑA DE CAMINATA ---
         if zona == 'caminata':
-            # Filtro de Semanas
             if "Semana 1" in tit and semana_actual != 1: continue
             if "Semana 2" in tit and semana_actual != 2: continue
             if "Semana 3" in tit and semana_actual != 3: continue
             
-            # Filtro de Descanso (Cada 2 días en Semana 1 y 2)
             if semana_actual in [1, 2] and hizo_caminata_ayer:
                 continue 
                 
             misiones_asignadas.append(mision)
             continue
             
-        # --- RAMA 3: ENTRENAMIENTO FÍSICO PESADO ---
         if "Suspensión" in tit and not barra_desbloqueada: continue
-        
-        if zona in zonas_fatigadas:
-            continue # Descartada: Músculo en recuperación
+        if zona in zonas_fatigadas: continue
+        if entrenamiento_pesado_asignado: continue
             
-        if entrenamiento_pesado_asignado:
-            continue # Descartada: Ya tienes una misión física hoy
-            
-        probabilidad = float(mision['probabilidad_aparicion'])
-        if random.random() <= probabilidad:
+        if random.random() <= float(mision['probabilidad_aparicion']):
             misiones_asignadas.append(mision)
-            entrenamiento_pesado_asignado = True # Cerramos el candado por hoy
+            entrenamiento_pesado_asignado = True
 
-    # 3. Inserción en la Base de Datos
     for m in misiones_asignadas:
         supabase.table("misiones_diarias").insert({
             "jugador_id": jugador_id,
@@ -162,6 +153,32 @@ def generar_misiones_del_dia(jugador_id):
         }).execute()
         
     return misiones_asignadas
+
+def aplicar_modificador_esfuerzo(texto, esfuerzo):
+    mult = 1.0
+    if esfuerzo == 'Muy Fácil': mult = 0.7
+    elif esfuerzo == 'Un poco fácil': mult = 0.85
+    elif esfuerzo == 'Adecuada': mult = 1.0
+    elif esfuerzo == 'Un poco compleja': mult = 1.15
+    elif esfuerzo == 'Compleja': mult = 1.30
+    
+    # Modificar dinámicamente las repeticiones (x12 -> x15)
+    def rep_replacer(match):
+        val = int(match.group(1))
+        new_val = max(1, int(val * mult))
+        return f"x{new_val}"
+        
+    texto_mod = re.sub(r'x(\d+)', rep_replacer, texto)
+    
+    # Modificar dinámicamente los tiempos (00:30 -> 00:39)
+    def time_replacer(match):
+        segs = int(match.group(1))
+        new_segs = max(5, int(segs * mult))
+        new_segs = min(new_segs, 59) # Evitamos que salte a formato minuto para mantener estética
+        return f"00:{new_segs:02d}"
+        
+    texto_mod = re.sub(r'00:(\d{2})', time_replacer, texto_mod)
+    return texto_mod
 
 def obtener_horas_totales_youtube(jugador_id):
     respuesta = supabase.table("historial_youtube").select("duracion_horas").eq("jugador_id", jugador_id).execute()
@@ -223,7 +240,6 @@ def otorgar_xp(jugador_id, cantidad_xp, zona_muscular=None):
     xp_siguiente = perfil['xp_siguiente_nivel']
     puntos_libres = perfil.get('puntos_atributo', 0)
     
-    # 1. Chequeo de Level Up General
     hubo_level_up = False
     while xp_actual >= xp_siguiente:
         xp_actual -= xp_siguiente 
@@ -239,23 +255,17 @@ def otorgar_xp(jugador_id, cantidad_xp, zona_muscular=None):
         "puntos_atributo": puntos_libres
     }
     
-    # 2. Inyección de XP Muscular Específica
     if zona_muscular:
-        # Normalizamos el nombre de la columna (ej: 'pecho' -> 'exp_pecho')
         columna_zona = f"exp_{zona_muscular.lower()}"
         if columna_zona in perfil:
             xp_zona_actual = perfil[columna_zona] or 0
             datos_a_actualizar[columna_zona] = xp_zona_actual + cantidad_xp
 
     supabase.table("perfil_jugador").update(datos_a_actualizar).eq("id", jugador_id).execute()
-    
     return hubo_level_up, nivel
 
 def analizar_fisico(imagen, peso_actual):
-    # Compresión preventiva de la imagen para optimizar la petición
     imagen.thumbnail((800, 800))
-    
-    # Invocamos al modelo Flash nativo de Gemini (rápido y con visión)
     model = genai.GenerativeModel('gemini-2.5-flash')
     
     prompt = f"""
@@ -268,7 +278,6 @@ def analizar_fisico(imagen, peso_actual):
     3. Cierra con una frase épica del Sistema.
     """
     
-    # Con Gemini, enviamos la imagen directamente en la lista junto al texto
     response = model.generate_content([prompt, imagen])
     return response.text
 
@@ -278,11 +287,10 @@ def analizar_fisico(imagen, peso_actual):
 st.title("STATUS PANEL")
 st.markdown("---")
 
-# --- SISTEMA DE ALARMA: LEVEL UP ---
 if st.session_state.get('play_level_up', False):
     st.audio("level_up.mp3", autoplay=True)
     st.balloons()
-    st.session_state['play_level_up'] = False # Apagamos el interruptor
+    st.session_state['play_level_up'] = False
 
 perfil = obtener_perfil()
 verificar_progreso_campana(perfil['id'], perfil)
@@ -327,7 +335,6 @@ st.subheader("ANÁLISIS ESTRUCTURAL AVANZADO")
 tab_svg, tab_ia = st.tabs(["Holograma de Progreso", "Escáner del Sistema (IA)"])
 
 with tab_svg:
-    # 1. Leer experiencia de las distintas zonas
     META_MUSCULO = 1000.0
     
     xp_inte = perfil.get('exp_intelecto', 0)
@@ -336,14 +343,12 @@ with tab_svg:
     xp_core = perfil.get('exp_core', 0)
     xp_pier = perfil.get('exp_piernas', 0)
 
-    # 2. Fórmula matemática de brillo: A más XP, mayor opacidad y brillo.
     op_inte = min(0.2 + (xp_inte / META_MUSCULO), 1.0)
     op_pecho = min(0.2 + (xp_pecho / META_MUSCULO), 1.0)
     op_espal = min(0.2 + (xp_espal / META_MUSCULO), 1.0)
     op_core = min(0.2 + (xp_core / META_MUSCULO), 1.0)
     op_pier = min(0.2 + (xp_pier / META_MUSCULO), 1.0)
 
-    # 3. Diseño del Esqueleto Poligonal (Wireframe)
     svg_cuerpo = f"""
     <svg viewBox="0 0 200 400" width="100%" height="350" xmlns="http://www.w3.org/2000/svg">
       <style>
@@ -408,85 +413,141 @@ if st.button("📡 Sincronizar Radar de YouTube"):
             xp_ganada = int(nuevas_horas * 5)
             level_up, nuevo_nivel = otorgar_xp(perfil['id'], xp_ganada)
             if level_up:
-                # Encendemos la alarma en la memoria del sistema
                 st.session_state['play_level_up'] = True
                 st.success(f"¡LEVEL UP! Nivel {nuevo_nivel} alcanzado. +3 Puntos de Atributo disponibles.")
             else:
                 st.success(f"¡Registro actualizado! {nuevas_horas} horas añadidas. +{xp_ganada} XP.")
-            
             st.rerun()
         else:
             st.info("No se detectaron nuevos entrenamientos en la lista.")
 
 st.markdown("---")
 
-# --- Sección 4: Misiones Diarias (QUEST BOARD) ---
-st.subheader("📜 QUEST BOARD")
-st.caption("DAILY QUEST - SURVIVE AND LEVEL UP")
+# --- Sección 4: Misiones Diarias (QUEST BOARD & COMBAT MODE) ---
+mision_activa = st.session_state.get('mision_activa')
 
-misiones_hoy = obtener_misiones_hoy(perfil['id'])
-
-if not misiones_hoy:
-    st.info("El Sistema aún no ha asignado las misiones de hoy.")
-    if st.button("🎲 Extraer Misiones del Sistema", use_container_width=True):
-        with st.spinner("Calculando fatiga y probabilidades..."):
-            generar_misiones_del_dia(perfil['id'])
-            st.rerun()
-else:
-    # Separar en pendientes y completadas para mejorar la UI
-    pendientes = [m for m in misiones_hoy if m.get('estado', 'pendiente') == 'pendiente']
-    completadas = [m for m in misiones_hoy if m.get('estado', '') == 'completada']
+if mision_activa:
+    # --- VENTANA DE MISIÓN ACTIVA (FOCUS MODE) ---
+    st.subheader("⚔️ MODO DE COMBATE ACTIVO")
     
-    # 1. RENDERIZAR MISIONES PENDIENTES
-    if pendientes:
-        st.write("### ⚠️ MISIONES ACTIVAS")
-        for mision in pendientes:
-            # st.container(border=True) crea una tarjeta visualmente atractiva
-            with st.container(border=True):
-                # El Rango [D], [C]... destaca en el título
-                st.markdown(f"#### [{mision['rango']}] {mision['titulo']}")
-                st.caption(f"ZONA DE IMPACTO: **{mision.get('zona_muscular', 'N/A').upper()}**")
-                st.write(mision['descripcion'])
-                
-                st.divider()
-                
-                # Botones de Acción (Aceptar vs Rechazar)
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("✅ Aceptar y Completar", key=f"comp_{mision['id']}", use_container_width=True):
-                        # 1. Buscar la XP que da esta misión
-                        res_dic = supabase.table("diccionario_misiones").select("xp_recompensa").eq("titulo", mision['titulo']).execute()
-                        xp_ganada = res_dic.data[0]['xp_recompensa'] if res_dic.data else 20
-                        
-                        # 2. ENVIAR LA XP A LA ZONA CORRESPONDIENTE
-                        zona_trabajada = mision.get('zona_muscular', None)
-                        if zona_trabajada == 'caminata': zona_trabajada = 'piernas' # La caminata sube piernas
-                        
-                        level_up, nuevo_nivel = otorgar_xp(perfil['id'], xp_ganada, zona_trabajada)
-                        
-                        # 3. Guardar como completada
-                        supabase.table("misiones_diarias").update({"estado": "completada"}).eq("id", mision['id']).execute()
-                        
-                        # Activar alarma si hubo level up
-                        if level_up:
-                            st.session_state['play_level_up'] = True
-                            st.toast(f"¡SUBIDA DE NIVEL! Ganaste +{xp_ganada} XP.")
-                        else:
-                            st.toast(f"Misión Cumplida. +{xp_ganada} XP añadida a tu barra.")
+    esfuerzo_seleccionado = st.select_slider(
+        "Ajuste Táctico (Modificador de Rutina en vivo):",
+        options=['Muy Fácil', 'Un poco fácil', 'Adecuada', 'Un poco compleja', 'Compleja'],
+        value='Adecuada'
+    )
+    
+    texto_modificado = aplicar_modificador_esfuerzo(mision_activa['descripcion'], esfuerzo_seleccionado)
+    
+    with st.container(border=True):
+        st.markdown(f"### {mision_activa['titulo']}")
+        st.caption(f"ZONA DE IMPACTO: **{mision_activa.get('zona_muscular', 'N/A').upper()}**")
+        st.markdown(f"**OBJETIVOS ADAPTADOS ({esfuerzo_seleccionado.upper()})**")
+        st.write(texto_modificado)
+    
+    # Cronómetro en vivo diseñado en JS
+    timer_html = """
+    <div style="background-color: #0e1117; padding: 15px; border-radius: 10px; text-align: center; border: 2px solid #E50914;">
+        <p style="color: #888; font-family: sans-serif; margin: 0 0 5px 0; font-weight: bold;">TIEMPO DE EJECUCIÓN</p>
+        <div id="stopwatch" style="font-size: 3.5rem; font-family: monospace; color: #00ffcc; font-weight: bold;">00:00:00</div>
+    </div>
+    <script>
+        let start = Date.now();
+        setInterval(function() {
+            let delta = Date.now() - start;
+            let hrs = Math.floor(delta / 3600000).toString().padStart(2, '0');
+            let mins = Math.floor((delta % 3600000) / 60000).toString().padStart(2, '0');
+            let secs = Math.floor((delta % 60000) / 1000).toString().padStart(2, '0');
+            document.getElementById('stopwatch').innerText = hrs + ":" + mins + ":" + secs;
+        }, 1000);
+    </script>
+    """
+    components.html(timer_html, height=130)
+    
+    col_fin1, col_fin2 = st.columns(2)
+    with col_fin1:
+        if st.button("🛑 FINALIZAR Y RECLAMAR XP", use_container_width=True):
+            tiempo_final = datetime.datetime.now()
+            segundos_tardados = int((tiempo_final - st.session_state['hora_inicio_mision']).total_seconds())
+            
+            # Cálculo de Multiplicador de Recompensas
+            res_dic = supabase.table("diccionario_misiones").select("xp_recompensa").eq("titulo", mision_activa['titulo']).execute()
+            base_xp = res_dic.data[0]['xp_recompensa'] if res_dic.data else 20
+            
+            mult_xp = {'Muy Fácil': 0.7, 'Un poco fácil': 0.85, 'Adecuada': 1.0, 'Un poco compleja': 1.15, 'Compleja': 1.3}
+            xp_final = int(base_xp * mult_xp[esfuerzo_seleccionado])
+            
+            zona_trabajada = mision_activa.get('zona_muscular', None)
+            if zona_trabajada == 'caminata': zona_trabajada = 'piernas'
+            
+            level_up, nuevo_nivel = otorgar_xp(perfil['id'], xp_final, zona_trabajada)
+            
+            supabase.table("misiones_diarias").update({
+                "estado": "completada",
+                "tiempo_segundos": segundos_tardados,
+                "nivel_esfuerzo": esfuerzo_seleccionado
+            }).eq("id", mision_activa['id']).execute()
+            
+            if level_up:
+                st.session_state['play_level_up'] = True
+                st.toast(f"¡SUBIDA DE NIVEL! Ganaste {xp_final} XP en {segundos_tardados} seg.")
+            else:
+                st.toast(f"Misión Cumplida. +{xp_final} XP en {segundos_tardados} seg.")
+            
+            st.session_state['mision_activa'] = None
+            st.session_state['hora_inicio_mision'] = None
+            st.rerun()
+            
+    with col_fin2:
+        if st.button("↩️ Abortar y Volver", use_container_width=True):
+            st.session_state['mision_activa'] = None
+            st.session_state['hora_inicio_mision'] = None
+            st.rerun()
+
+else:
+    # --- TABLERO NORMAL DE MISIONES ---
+    st.subheader("📜 QUEST BOARD")
+    st.caption("DAILY QUEST - SURVIVE AND LEVEL UP")
+
+    misiones_hoy = obtener_misiones_hoy(perfil['id'])
+
+    if not misiones_hoy:
+        st.info("El Sistema aún no ha asignado las misiones de hoy.")
+        if st.button("🎲 Extraer Misiones del Sistema", use_container_width=True):
+            with st.spinner("Calculando fatiga y probabilidades..."):
+                generar_misiones_del_dia(perfil['id'])
+                st.rerun()
+    else:
+        pendientes = [m for m in misiones_hoy if m.get('estado', 'pendiente') == 'pendiente']
+        completadas = [m for m in misiones_hoy if m.get('estado', '') == 'completada']
+        
+        if pendientes:
+            st.write("### ⚠️ MISIONES ACTIVAS")
+            for mision in pendientes:
+                with st.container(border=True):
+                    st.markdown(f"#### [{mision['rango']}] {mision['titulo']}")
+                    st.caption(f"ZONA DE IMPACTO: **{mision.get('zona_muscular', 'N/A').upper()}**")
+                    st.write(mision['descripcion'])
+                    
+                    st.divider()
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("▶️ INICIAR MISIÓN", key=f"iniciar_{mision['id']}", use_container_width=True):
+                            st.session_state['mision_activa'] = mision
+                            st.session_state['hora_inicio_mision'] = datetime.datetime.now()
+                            st.rerun()
+                    with col2:
+                        if st.button("❌ Rechazar", key=f"rech_{mision['id']}", use_container_width=True):
+                            supabase.table("misiones_diarias").delete().eq("id", mision['id']).execute()
+                            st.toast("Misión rechazada y eliminada del panel.")
+                            st.rerun()
                             
-                        st.rerun() # Obliga a la app a recargar y mostrar los gráficos llenos
-                        
-                with col2:
-                    if st.button("❌ Rechazar", key=f"rech_{mision['id']}", use_container_width=True):
-                        # Eliminamos la misión de hoy si no la vas a hacer
-                        supabase.table("misiones_diarias").delete().eq("id", mision['id']).execute()
-                        st.toast("Misión rechazada y eliminada del panel.")
-                        st.rerun()
-                        
-    # 2. RENDERIZAR MISIONES COMPLETADAS (Solo un registro visual)
-    if completadas:
-        st.write("### 🏆 REGISTRO DE VICTORIAS HOY")
-        for mision in completadas:
-            with st.container(border=True):
-                st.markdown(f"~~[{mision['rango']}] {mision['titulo']}~~")
-                st.success("Misión Completada")
+        if completadas:
+            st.write("### 🏆 REGISTRO DE VICTORIAS HOY")
+            for mision in completadas:
+                with st.container(border=True):
+                    st.markdown(f"~~[{mision['rango']}] {mision['titulo']}~~")
+                    tiempo_texto = ""
+                    if mision.get('tiempo_segundos'):
+                        m, s = divmod(mision['tiempo_segundos'], 60)
+                        tiempo_texto = f" | ⏱️ {m}m {s}s | 🔥 {mision.get('nivel_esfuerzo', '')}"
+                    st.success(f"Misión Completada {tiempo_texto}")
