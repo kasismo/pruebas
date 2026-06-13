@@ -138,7 +138,7 @@ def generar_misiones_del_dia(jugador_id):
             
         # Rama Física Pesada
         if "Suspensión" in tit and not barra_desbloqueada: continue
-        if zona in zones_fatigadas: continue
+        if zona in zonas_fatigadas: continue
         if entrenamiento_pesado_asignado: continue
             
         if random.random() <= float(mision['probabilidad_aparicion']):
