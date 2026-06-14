@@ -184,35 +184,48 @@ def generar_misiones_del_dia(jugador_id):
 def crear_mision_epica_ia(jugador_id, contexto_usuario):
     model = genai.GenerativeModel('gemini-2.5-flash')
     prompt = f"""
-    Eres el Sistema de Solo Leveling. El jugador solicita una Misión Épica a largo plazo basada en este objetivo: "{contexto_usuario}"
-    Crea una misión acorde. Devuelve ÚNICAMENTE un objeto JSON válido con esta estructura estricta:
+    Actúa estrictamente como el Sistema de Solo Leveling. El jugador solicita una Misión Épica a largo plazo basada en este objetivo: "{contexto_usuario}"
+    Crea una misión de alta jerarquía. Debes estructurar la respuesta en un formato JSON plano y limpio.
+    
+    Genera exactamente este esquema JSON (asegúrate de escapar comillas internas si usas nombres de unidades):
     {{
-      "titulo": "[MISIÓN ÉPICA] Nombre creativo",
-      "descripcion": "Descripción épica y desglose de la tarea a largo plazo.",
-      "rango": "A" o "S" o "B",
-      "zona_muscular": "intelecto" (si es estudio/trabajo) o el músculo correspondiente si es físico,
-      "xp_recompensa": un número entero alto (ej: 300 a 1000 según complejidad)
+      "titulo": "[MISIÓN ÉPICA] Nombre creativo y épico",
+      "descripcion": "Descripción detallada estilo RPG, desglosando los objetivos.",
+      "rango": "S",
+      "zona_muscular": "intelecto",
+      "xp_recompensa": 500
     }}
+    
+    Responde únicamente el objeto JSON, sin envoltorios de código markdown (no uses ```json).
     """
     response = model.generate_content(prompt)
     try:
-        # Limpiar backticks de markdown si la IA los incluye
-        clean_json = response.text.strip().removeprefix("```json").removesuffix("```").strip()
-        datos_mision = json.loads(clean_json)
+        texto_api = response.text.strip()
+        
+        # Limpieza de emergencia por si Gemini ignora la orden y mete bloques de código
+        if "```" in texto_api:
+            texto_api = texto_api.split("```")[1]
+            if texto_api.startswith("json"):
+                texto_api = texto_api[4:]
+        texto_api = texto_api.strip()
+        
+        datos_mision = json.loads(texto_api)
         
         supabase.table("misiones_diarias").insert({
             "jugador_id": jugador_id,
             "titulo": datos_mision['titulo'],
             "descripcion": datos_mision['descripcion'],
             "categoria": "especial",
-            "rango": datos_mision['rango'],
-            "zona_muscular": datos_mision['zona_muscular'],
+            "rango": datos_mision.get('rango', 'A'),
+            "zona_muscular": datos_mision.get('zona_muscular', 'intelecto'),
             "fecha": datetime.date.today().isoformat(),
             "estado": "pendiente",
-            "tipo_mision": "epica" # Marca vital para que no se borre
+            "tipo_mision": "epica"
         }).execute()
         return True
     except Exception as e:
+        # Imprime el error en la consola de Streamlit para saber exactamente qué rompió el JSON
+        print(f"Error crítico en Oráculo: {e} | Texto recibido: {response.text}")
         return False
 
 # Funciones de YouTube y XP (Mantenidas intactas de la versión anterior)
