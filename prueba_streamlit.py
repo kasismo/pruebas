@@ -16,7 +16,7 @@ from PIL import Image
 st.set_page_config(
     page_title="Solo Leveling: System",
     page_icon="🗡️",
-    layout="wide" # Ampliamos el layout para acomodar los títulos
+    layout="wide"
 )
 
 st.markdown("""
@@ -33,6 +33,10 @@ if 'mision_activa' not in st.session_state:
     st.session_state['mision_activa'] = None
 if 'hora_inicio_mision' not in st.session_state:
     st.session_state['hora_inicio_mision'] = None
+
+# --- PARCHE DE ZONA HORARIA (ARGENTINA UTC-3) ---
+def get_fecha_hoy():
+    return (datetime.datetime.utcnow() - timedelta(hours=3)).date()
 
 # -----------------------------------------------------------------------------
 # CONEXIÓN A BASES DE DATOS Y APIs
@@ -68,7 +72,7 @@ def calcular_rango_fisico(xp_total):
     return "Monarca Físico (Clase S)"
 
 def actualizar_racha(jugador_id, perfil):
-    hoy = datetime.date.today()
+    hoy = get_fecha_hoy()
     ultima = perfil.get('ultima_conexion')
     racha_actual = perfil.get('racha_dias', 0)
     
@@ -79,7 +83,7 @@ def actualizar_racha(jugador_id, perfil):
         if diferencia == 1:
             racha_actual += 1
         elif diferencia > 1:
-            racha_actual = 1 # Rompió la racha, vuelve a empezar
+            racha_actual = 1
     else:
         racha_actual = 1
 
@@ -103,23 +107,22 @@ def obtener_perfil():
         return nuevo_perfil.data[0]
 
 def obtener_misiones_activas(jugador_id):
-    hoy = datetime.date.today().isoformat()
+    hoy = get_fecha_hoy().isoformat()
     respuesta = supabase.table("misiones_diarias").select("*").eq("jugador_id", jugador_id).execute()
     
     misiones_mostrar = []
     for m in respuesta.data:
-        # Mostramos las Épicas pendientes sin importar la fecha, y las Diarias solo si son de hoy
         if m.get('tipo_mision') == 'epica' and m.get('estado') == 'pendiente':
             misiones_mostrar.append(m)
         elif m.get('tipo_mision') == 'diaria' and m['fecha'] == hoy:
             misiones_mostrar.append(m)
         elif m.get('estado') == 'completada' and m['fecha'] == hoy:
-            misiones_mostrar.append(m) # Mostrar victorias de hoy
+            misiones_mostrar.append(m) 
             
     return misiones_mostrar
 
 def generar_misiones_del_dia(jugador_id):
-    hoy = datetime.date.today()
+    hoy = get_fecha_hoy()
     ayer = (hoy - timedelta(days=1)).isoformat()
     hoy_str = hoy.isoformat()
     
@@ -127,7 +130,6 @@ def generar_misiones_del_dia(jugador_id):
     semana_actual = perfil.get('semana_actual', 1)
     barra_desbloqueada = perfil.get('barra_calistenia_desbloqueada', False)
     
-    # Check de Misiones Épicas Activas (El Supresor)
     misiones_actuales = obtener_misiones_activas(jugador_id)
     hay_epica_intelecto = any(m.get('tipo_mision') == 'epica' and m.get('zona_muscular') == 'intelecto' and m.get('estado') == 'pendiente' for m in misiones_actuales)
     
@@ -143,7 +145,6 @@ def generar_misiones_del_dia(jugador_id):
         tit = mision['titulo']
         zona = mision.get('zona_muscular', 'general')
         
-        # Si hay una misión épica de intelecto, bloqueamos las diarias de intelecto para hacer Focus
         if zona == 'intelecto':
             if hay_epica_intelecto: continue
             if random.random() <= float(mision['probabilidad_aparicion']):
@@ -187,7 +188,7 @@ def crear_mision_epica_ia(jugador_id, contexto_usuario):
     Actúa estrictamente como el Sistema de Solo Leveling. El jugador solicita una Misión Épica a largo plazo basada en este objetivo: "{contexto_usuario}"
     Crea una misión de alta jerarquía. Debes estructurar la respuesta en un formato JSON plano y limpio.
     
-    Genera exactamente este esquema JSON (asegúrate de escapar comillas internas si usas nombres de unidades):
+    Genera exactamente este esquema JSON (asegúrate de escapar comillas internas):
     {{
       "titulo": "[MISIÓN ÉPICA] Nombre creativo y épico",
       "descripcion": "Descripción detallada estilo RPG, desglosando los objetivos.",
@@ -196,19 +197,16 @@ def crear_mision_epica_ia(jugador_id, contexto_usuario):
       "xp_recompensa": 500
     }}
     
-    Responde únicamente el objeto JSON, sin envoltorios de código markdown (no uses ```json).
+    Responde únicamente el objeto JSON, sin envoltorios de código markdown ni texto adicional.
     """
     response = model.generate_content(prompt)
     try:
         texto_api = response.text.strip()
-        
-        # Limpieza de emergencia por si Gemini ignora la orden y mete bloques de código
         if "```" in texto_api:
             texto_api = texto_api.split("```")[1]
             if texto_api.startswith("json"):
                 texto_api = texto_api[4:]
         texto_api = texto_api.strip()
-        
         datos_mision = json.loads(texto_api)
         
         supabase.table("misiones_diarias").insert({
@@ -218,17 +216,15 @@ def crear_mision_epica_ia(jugador_id, contexto_usuario):
             "categoria": "especial",
             "rango": datos_mision.get('rango', 'A'),
             "zona_muscular": datos_mision.get('zona_muscular', 'intelecto'),
-            "fecha": datetime.date.today().isoformat(),
+            "fecha": get_fecha_hoy().isoformat(),
             "estado": "pendiente",
             "tipo_mision": "epica"
         }).execute()
         return True
     except Exception as e:
-        # Imprime el error en la consola de Streamlit para saber exactamente qué rompió el JSON
         print(f"Error crítico en Oráculo: {e} | Texto recibido: {response.text}")
         return False
 
-# Funciones de YouTube y XP (Mantenidas intactas de la versión anterior)
 def obtener_horas_totales_youtube(jugador_id):
     respuesta = supabase.table("historial_youtube").select("duracion_horas").eq("jugador_id", jugador_id).execute()
     if not respuesta.data: return 0.0
@@ -303,13 +299,23 @@ def aplicar_modificador_esfuerzo(texto, esfuerzo):
     texto_mod = re.sub(r'00:(\d{2})', time_replacer, texto_mod)
     return texto_mod
 
+def analizar_fisico(imagen, peso_actual):
+    imagen.thumbnail((800, 800))
+    model = genai.GenerativeModel('gemini-2.5-flash')
+    prompt = f"""
+    Actúa estrictamente como un Sistema RPG de entrenamiento físico. Analiza esta imagen.
+    El usuario pesa {peso_actual} kg y está entrenando calistenia para dominar 25 dominadas estrictas.
+    Reporte: 1. Musculatura visible (tracción). 2. Consejo técnico. 3. Frase épica.
+    """
+    response = model.generate_content([prompt, imagen])
+    return response.text
+
 # -----------------------------------------------------------------------------
 # INTERFAZ DE USUARIO (UI)
 # -----------------------------------------------------------------------------
 perfil = obtener_perfil()
 racha_dias = actualizar_racha(perfil['id'], perfil)
 
-# Cálculo de Rangos Actuales
 rango_it = calcular_rango_it(perfil.get('exp_intelecto', 0))
 xp_total_fisica = perfil.get('exp_pecho',0) + perfil.get('exp_espalda',0) + perfil.get('exp_piernas',0) + perfil.get('exp_core',0)
 rango_fisico = calcular_rango_fisico(xp_total_fisica)
@@ -326,7 +332,6 @@ if st.session_state['play_level_up']:
     st.balloons()
     st.session_state['play_level_up'] = False
 
-# --- Sección 1: Estadísticas y Títulos ---
 col1, col2, col3 = st.columns([1, 2, 1])
 with col1:
     st.subheader(f"[{perfil['nombre']}]")
@@ -355,66 +360,74 @@ with col3:
 
 st.markdown("---")
 
-# --- Sección 2: El Oráculo (Generador de Misiones Épicas) ---
 with st.expander("🔮 ORÁCULO DEL SISTEMA (Forjar Misión Especial)"):
-    st.write("Solicita una misión a largo plazo. El Sistema suprimirá las tareas diarias menores de esa rama hasta que cumplas este objetivo.")
-    prompt_mision = st.text_area("Contexto de la Misión:", placeholder="Ej: Tengo que estudiar 3 libros de 25 páginas para la semana que viene...")
+    st.write("Solicita una misión a largo plazo. El Sistema suprimirá las tareas diarias menores de esa rama.")
+    prompt_mision = st.text_area("Contexto de la Misión:", placeholder="Ej: Tengo que estudiar 3 libros de 25 páginas...")
     if st.button("⚡ Forjar Misión con IA"):
         if prompt_mision:
-            with st.spinner("La IA está calculando la jerarquía y las recompensas de tu destino..."):
+            with st.spinner("La IA está calculando la jerarquía..."):
                 exito = crear_mision_epica_ia(perfil['id'], prompt_mision)
                 if exito:
-                    st.success("Misión Épica registrada en la Base de Datos.")
+                    st.success("Misión Épica registrada.")
                     st.rerun()
                 else:
-                    st.error("Error de conexión con el Oráculo. Intenta de nuevo.")
+                    st.error("Error de conexión con el Oráculo.")
 
 st.markdown("---")
 
-# --- Sección 3: Holograma Estructural ---
 st.subheader("ANÁLISIS ESTRUCTURAL AVANZADO")
-META_MUSCULO = 1000.0
-xp_inte = perfil.get('exp_intelecto', 0)
-xp_pecho = perfil.get('exp_pecho', 0)
-xp_espal = perfil.get('exp_espalda', 0)
-xp_core = perfil.get('exp_core', 0)
-xp_pier = perfil.get('exp_piernas', 0)
+tab_svg, tab_ia = st.tabs(["Holograma", "Escáner (IA)"])
 
-op_inte = min(0.2 + (xp_inte / META_MUSCULO), 1.0)
-op_pecho = min(0.2 + (xp_pecho / META_MUSCULO), 1.0)
-op_espal = min(0.2 + (xp_espal / META_MUSCULO), 1.0)
-op_core = min(0.2 + (xp_core / META_MUSCULO), 1.0)
-op_pier = min(0.2 + (xp_pier / META_MUSCULO), 1.0)
+with tab_svg:
+    META_MUSCULO = 1000.0
+    xp_inte = perfil.get('exp_intelecto', 0)
+    xp_pecho = perfil.get('exp_pecho', 0)
+    xp_espal = perfil.get('exp_espalda', 0)
+    xp_core = perfil.get('exp_core', 0)
+    xp_pier = perfil.get('exp_piernas', 0)
 
-svg_cuerpo = f"""
-<svg viewBox="0 0 200 400" width="100%" height="300" xmlns="http://www.w3.org/2000/svg">
-    <style>
-    .glow {{ stroke: #00ffff; stroke-width: 1.5; fill: #00ffcc; transition: all 1s ease; }}
-    #intelecto {{ opacity: {op_inte}; filter: drop-shadow(0 0 {op_inte * 10}px #00ffcc); }}
-    #pecho {{ opacity: {op_pecho}; filter: drop-shadow(0 0 {op_pecho * 10}px #00ffcc); }}
-    #espalda {{ opacity: {op_espal}; filter: drop-shadow(0 0 {op_espal * 10}px #00ffcc); }}
-    #core {{ opacity: {op_core}; filter: drop-shadow(0 0 {op_core * 10}px #00ffcc); }}
-    #piernas {{ opacity: {op_pier}; filter: drop-shadow(0 0 {op_pier * 10}px #00ffcc); }}
-    </style>
-    <polygon id="intelecto" class="glow" points="90,10 110,10 115,35 100,50 85,35" />
-    <polygon id="espalda" class="glow" points="55,55 145,55 135,90 125,65 75,65 65,90" />
-    <polygon id="espalda" class="glow" points="60,65 70,95 65,160 50,160 50,100" /> 
-    <polygon id="espalda" class="glow" points="140,65 130,95 135,160 150,160 150,100" /> 
-    <polygon id="pecho" class="glow" points="70,60 130,60 125,95 100,105 75,95" />
-    <polygon id="core" class="glow" points="80,100 120,100 115,150 100,165 85,150" />
-    <polygon id="piernas" class="glow" points="80,160 100,170 100,220 85,340 70,340 75,220" /> 
-    <polygon id="piernas" class="glow" points="120,160 100,170 100,220 115,340 130,340 125,220" /> 
-</svg>
-"""
-col_b, col_g = st.columns([1, 1])
-with col_b:
-    st.progress(min(xp_inte/META_MUSCULO, 1.0), text=f"Intelecto: {xp_inte}")
-    st.progress(min(xp_espal/META_MUSCULO, 1.0), text=f"Espalda: {xp_espal}")
-    st.progress(min(xp_pecho/META_MUSCULO, 1.0), text=f"Pecho: {xp_pecho}")
-    st.progress(min(xp_core/META_MUSCULO, 1.0), text=f"Core: {xp_core}")
-    st.progress(min(xp_pier/META_MUSCULO, 1.0), text=f"Piernas: {xp_pier}")
-with col_g:
-    st.markdown(svg_cuerpo, unsafe_allow_html=True)
+    op_inte = min(0.2 + (xp_inte / META_MUSCULO), 1.0)
+    op_pecho = min(0.2 + (xp_pecho / META_MUSCULO), 1.0)
+    op_espal = min(0.2 + (xp_espal / META_MUSCULO), 1.0)
+    op_core = min(0.2 + (xp_core / META_MUSCULO), 1.0)
+    op_pier = min(0.2 + (xp_pier / META_MUSCULO), 1.0)
+
+    svg_cuerpo = f"""
+    <svg viewBox="0 0 200 400" width="100%" height="300" xmlns="http://www.w3.org/2000/svg">
+        <style>
+        .glow {{ stroke: #00ffff; stroke-width: 1.5; fill: #00ffcc; transition: all 1s ease; }}
+        #intelecto {{ opacity: {op_inte}; filter: drop-shadow(0 0 {op_inte * 10}px #00ffcc); }}
+        #pecho {{ opacity: {op_pecho}; filter: drop-shadow(0 0 {op_pecho * 10}px #00ffcc); }}
+        #espalda {{ opacity: {op_espal}; filter: drop-shadow(0 0 {op_espal * 10}px #00ffcc); }}
+        #core {{ opacity: {op_core}; filter: drop-shadow(0 0 {op_core * 10}px #00ffcc); }}
+        #piernas {{ opacity: {op_pier}; filter: drop-shadow(0 0 {op_pier * 10}px #00ffcc); }}
+        </style>
+        <polygon id="intelecto" class="glow" points="90,10 110,10 115,35 100,50 85,35" />
+        <polygon id="espalda" class="glow" points="55,55 145,55 135,90 125,65 75,65 65,90" />
+        <polygon id="espalda" class="glow" points="60,65 70,95 65,160 50,160 50,100" /> 
+        <polygon id="espalda" class="glow" points="140,65 130,95 135,160 150,160 150,100" /> 
+        <polygon id="pecho" class="glow" points="70,60 130,60 125,95 100,105 75,95" />
+        <polygon id="core" class="glow" points="80,100 120,100 115,150 100,165 85,150" />
+        <polygon id="piernas" class="glow" points="80,160 100,170 100,220 85,340 70,340 75,220" /> 
+        <polygon id="piernas" class="glow" points="120,160 100,170 100,220 115,340 130,340 125,220" /> 
+    </svg>
+    """
+    col_b, col_g = st.columns([1, 1])
+    with col_b:
+        st.progress(min(xp_inte/META_MUSCULO, 1.0), text=f"Intelecto: {xp_inte}")
+        st.progress(min(xp_espal/META_MUSCULO, 1.0), text=f"Espalda: {xp_espal}")
+        st.progress(min(xp_pecho/META_MUSCULO, 1.0), text=f"Pecho: {xp_pecho}")
+        st.progress(min(xp_core/META_MUSCULO, 1.0), text=f"Core: {xp_core}")
+        st.progress(min(xp_pier/META_MUSCULO, 1.0), text=f"Piernas: {xp_pier}")
+    with col_g:
+        st.markdown(svg_cuerpo, unsafe_allow_html=True)
+
+with tab_ia:
+    foto_subida = st.file_uploader("Subir foto del torso", type=['jpg', 'jpeg', 'png'])
+    peso_input = st.number_input("Peso actual (kg):", min_value=50.0, max_value=150.0, value=102.0)
+    if foto_subida and st.button("👁️ Iniciar Escaneo"):
+        with st.spinner("Analizando composición..."):
+            st.markdown(f"> *{analizar_fisico(Image.open(foto_subida), peso_input)}*")
 
 st.markdown("---")
 
@@ -429,7 +442,6 @@ if mision_activa:
         options=['Muy Fácil', 'Un poco fácil', 'Adecuada', 'Un poco compleja', 'Compleja'],
         value='Adecuada'
     )
-    
     texto_modificado = aplicar_modificador_esfuerzo(mision_activa['descripcion'], esfuerzo_seleccionado)
     
     with st.container(border=True):
@@ -439,7 +451,7 @@ if mision_activa:
     
     timer_html = """
     <div style="background-color: #0e1117; padding: 15px; border-radius: 10px; text-align: center; border: 2px solid #E50914;">
-        <p style="color: #888; font-family: sans-serif; margin: 0 0 5px 0; font-weight: bold;">TIEMPO DE EJECUCIÓN</p>
+        <p style="color: #888; margin: 0 0 5px 0; font-weight: bold;">TIEMPO DE EJECUCIÓN</p>
         <div id="stopwatch" style="font-size: 3.5rem; font-family: monospace; color: #00ffcc; font-weight: bold;">00:00:00</div>
     </div>
     <script>
@@ -461,7 +473,7 @@ if mision_activa:
             tiempo_final = datetime.datetime.now()
             segundos_tardados = int((tiempo_final - st.session_state['hora_inicio_mision']).total_seconds())
             
-            base_xp = mision_activa.get('xp_recompensa', 50) # Fallback si no tiene
+            base_xp = mision_activa.get('xp_recompensa', 50)
             mult_xp = {'Muy Fácil': 0.7, 'Un poco fácil': 0.85, 'Adecuada': 1.0, 'Un poco compleja': 1.15, 'Compleja': 1.3}
             xp_final = int(base_xp * mult_xp[esfuerzo_seleccionado])
             
@@ -470,15 +482,32 @@ if mision_activa:
             
             level_up, nuevo_nivel = otorgar_xp(perfil['id'], xp_final, zona_trabajada)
             
-            supabase.table("misiones_diarias").update({
-                "estado": "completada",
-                "tiempo_segundos": segundos_tardados,
-                "nivel_esfuerzo": esfuerzo_seleccionado
-            }).eq("id", mision_activa['id']).execute()
+            # Si era misión épica y se finaliza
+            if mision_activa.get('tipo_mision') == 'epica':
+                supabase.table("misiones_diarias").update({
+                    "estado": "completada",
+                    "tiempo_segundos": segundos_tardados,
+                    "nivel_esfuerzo": esfuerzo_seleccionado
+                }).eq("id", mision_activa['id']).execute()
+            else:
+                # Misión diaria con Sobrecarga Progresiva
+                res_dic = supabase.table("diccionario_misiones").select("*").eq("titulo", mision_activa['titulo']).execute()
+                if res_dic.data and esfuerzo_seleccionado != 'Adecuada':
+                    m_base = res_dic.data[0]
+                    mult_texto = {'Muy Fácil': 1.25, 'Un poco fácil': 1.10, 'Un poco compleja': 1.0, 'Compleja': 0.85}[esfuerzo_seleccionado]
+                    desc_evo = re.sub(r'x(\d+)', lambda m: f"x{max(1, int(int(m.group(1)) * mult_texto))}", m_base['descripcion'])
+                    desc_evo = re.sub(r'00:(\d{2})', lambda m: f"00:{min(max(5, int(int(m.group(1)) * mult_texto)), 59):02d}", desc_evo)
+                    supabase.table("diccionario_misiones").update({"descripcion": desc_evo}).eq("titulo", mision_activa['titulo']).execute()
+
+                supabase.table("misiones_diarias").update({
+                    "estado": "completada",
+                    "tiempo_segundos": segundos_tardados,
+                    "nivel_esfuerzo": esfuerzo_seleccionado
+                }).eq("id", mision_activa['id']).execute()
             
             if level_up:
                 st.session_state['play_level_up'] = True
-                st.toast(f"¡SUBIDA DE NIVEL! Ganaste {xp_final} XP en {segundos_tardados} seg.")
+                st.toast(f"¡SUBIDA DE NIVEL! Ganaste {xp_final} XP.")
             else:
                 st.toast(f"Misión Cumplida. +{xp_final} XP.")
             
@@ -496,17 +525,20 @@ else:
     st.subheader("📜 QUEST BOARD")
     misiones_activas = obtener_misiones_activas(perfil['id'])
 
-    if not misiones_activas:
-        st.info("El Sistema aún no ha asignado las misiones de hoy.")
-        if st.button("🎲 Extraer Misiones del Sistema", use_container_width=True):
+    epicas = [m for m in misiones_activas if m.get('tipo_mision') == 'epica' and m.get('estado') == 'pendiente']
+    diarias = [m for m in misiones_activas if m.get('tipo_mision') == 'diaria' and m.get('estado') == 'pendiente']
+    completadas = [m for m in misiones_activas if m.get('estado') == 'completada' and m.get('fecha') == get_fecha_hoy().isoformat()]
+
+    hoy_str = get_fecha_hoy().isoformat()
+    diarias_generadas_hoy = [m for m in misiones_activas if m.get('tipo_mision') == 'diaria' and m.get('fecha') == hoy_str]
+
+    if not diarias_generadas_hoy:
+        st.info("El Sistema aún no ha asignado las misiones rutinarias de hoy.")
+        if st.button("🎲 Extraer Misiones Diarias", use_container_width=True):
             with st.spinner("Calculando fatiga y probabilidades..."):
                 generar_misiones_del_dia(perfil['id'])
                 st.rerun()
     else:
-        epicas = [m for m in misiones_activas if m.get('tipo_mision') == 'epica' and m.get('estado') == 'pendiente']
-        diarias = [m for m in misiones_activas if m.get('tipo_mision') == 'diaria' and m.get('estado') == 'pendiente']
-        completadas = [m for m in misiones_activas if m.get('estado') == 'completada']
-        
         if epicas:
             st.write("### 👑 CAMPAÑAS ACTIVAS (LARGO PLAZO)")
             for mision in epicas:
@@ -548,4 +580,8 @@ else:
             for mision in completadas:
                 with st.container(border=True):
                     st.markdown(f"~~[{mision['rango']}] {mision['titulo']}~~")
-                    st.success(f"Misión Completada | Fricción: {mision.get('nivel_esfuerzo', 'Adecuada')}")
+                    tiempo_texto = ""
+                    if mision.get('tiempo_segundos'):
+                        m, s = divmod(mision['tiempo_segundos'], 60)
+                        tiempo_texto = f" | ⏱️ {m}m {s}s | 🔥 {mision.get('nivel_esfuerzo', '')}"
+                    st.success(f"Misión Completada {tiempo_texto}")
