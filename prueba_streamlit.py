@@ -133,17 +133,27 @@ def generar_misiones_del_dia(jugador_id):
     misiones_actuales = obtener_misiones_activas(jugador_id)
     hay_epica_intelecto = any(m.get('tipo_mision') == 'epica' and m.get('zona_muscular') == 'intelecto' and m.get('estado') == 'pendiente' for m in misiones_actuales)
     
-    res_ayer = supabase.table("misiones_diarias").select("*").eq("jugador_id", jugador_id).eq("fecha", ayer).execute()
-    zonas_fatigadas = [m.get('zona_muscular') for m in res_ayer.data if m.get('zona_muscular') in ['pecho', 'espalda', 'piernas', 'core']]
-    hizo_caminata_ayer = any(m.get('zona_muscular') == 'caminata' for m in res_ayer.data)
+    # Leemos ayer y hoy para evitar duplicados en el mismo día
+    res_recientes = supabase.table("misiones_diarias").select("*").eq("jugador_id", jugador_id).in_("fecha", [ayer, hoy_str]).execute()
+    
+    zonas_fatigadas = [m.get('zona_muscular') for m in res_recientes.data if m.get('zona_muscular') in ['pecho', 'espalda', 'piernas', 'core'] and m.get('fecha') == ayer]
+    hizo_caminata_reciente = any(m.get('zona_muscular') == 'caminata' for m in res_recientes.data if m.get('fecha') == ayer)
+    
+    # Registro de lo que ya se generó HOY para no repetirlo
+    misiones_ya_generadas_hoy = [m['titulo'] for m in res_recientes.data if m.get('fecha') == hoy_str]
             
     res_catalogo = supabase.table("diccionario_misiones").select("*").execute()
     misiones_asignadas = []
-    entrenamiento_pesado_asignado = False
+    
+    # Bloqueamos rutina física si ya se asignó una hoy
+    entrenamiento_pesado_asignado = any(m.get('zona_muscular') in ['pecho', 'espalda', 'piernas', 'core'] for m in res_recientes.data if m.get('fecha') == hoy_str)
     
     for mision in res_catalogo.data:
         tit = mision['titulo']
         zona = mision.get('zona_muscular', 'general')
+        
+        # Filtro Anti-Spam: Si ya sacaste esta misión hoy, no la repite
+        if tit in misiones_ya_generadas_hoy: continue
         
         if zona == 'intelecto':
             if hay_epica_intelecto: continue
@@ -155,7 +165,7 @@ def generar_misiones_del_dia(jugador_id):
             if "Semana 1" in tit and semana_actual != 1: continue
             if "Semana 2" in tit and semana_actual != 2: continue
             if "Semana 3" in tit and semana_actual != 3: continue
-            if semana_actual in [1, 2] and hizo_caminata_ayer: continue 
+            if semana_actual in [1, 2] and hizo_caminata_reciente: continue 
             misiones_asignadas.append(mision)
             continue
             
@@ -431,7 +441,9 @@ with tab_ia:
 
 st.markdown("---")
 
-# --- Sección 4: Misiones Diarias & Modo Combate ---
+# -----------------------------------------------------------------------------
+# Sección 4: Misiones Diarias & Modo Combate (UI REESCRITA)
+# -----------------------------------------------------------------------------
 mision_activa = st.session_state.get('mision_activa')
 
 if mision_activa:
@@ -529,59 +541,55 @@ else:
     diarias = [m for m in misiones_activas if m.get('tipo_mision') == 'diaria' and m.get('estado') == 'pendiente']
     completadas = [m for m in misiones_activas if m.get('estado') == 'completada' and m.get('fecha') == get_fecha_hoy().isoformat()]
 
-    hoy_str = get_fecha_hoy().isoformat()
-    diarias_generadas_hoy = [m for m in misiones_activas if m.get('tipo_mision') == 'diaria' and m.get('fecha') == hoy_str]
-
-    if not diarias_generadas_hoy:
-        st.info("El Sistema aún no ha asignado las misiones rutinarias de hoy.")
+    if epicas:
+        st.write("### 👑 CAMPAÑAS ACTIVAS (LARGO PLAZO)")
+        for mision in epicas:
+            with st.container(border=True):
+                st.markdown(f"<h4 style='color: #FFD700;'>[{mision['rango']}] {mision['titulo']}</h4>", unsafe_allow_html=True)
+                st.caption(f"ZONA DE IMPACTO: **{mision.get('zona_muscular', 'N/A').upper()}**")
+                st.write(mision['descripcion'])
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("▶️ CONTINUAR / FINALIZAR", key=f"iniciar_epica_{mision['id']}", use_container_width=True):
+                        st.session_state['mision_activa'] = mision
+                        st.session_state['hora_inicio_mision'] = datetime.datetime.now()
+                        st.rerun()
+                with col2:
+                    if st.button("❌ Abandonar Campaña", key=f"rech_epica_{mision['id']}", use_container_width=True):
+                        supabase.table("misiones_diarias").delete().eq("id", mision['id']).execute()
+                        st.rerun()
+                        
+    st.write("### ⚠️ MISIONES DIARIAS")
+    if diarias:
+        for mision in diarias:
+            with st.container(border=True):
+                st.markdown(f"#### [{mision['rango']}] {mision['titulo']}")
+                st.caption(f"ZONA DE IMPACTO: **{mision.get('zona_muscular', 'N/A').upper()}**")
+                st.write(mision['descripcion'])
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("▶️ INICIAR MISIÓN", key=f"iniciar_{mision['id']}", use_container_width=True):
+                        st.session_state['mision_activa'] = mision
+                        st.session_state['hora_inicio_mision'] = datetime.datetime.now()
+                        st.rerun()
+                with col2:
+                    if st.button("❌ Rechazar", key=f"rech_{mision['id']}", use_container_width=True):
+                        supabase.table("misiones_diarias").delete().eq("id", mision['id']).execute()
+                        st.rerun()
+    else:
+        st.info("El Sistema no detecta misiones rutinarias activas.")
         if st.button("🎲 Extraer Misiones Diarias", use_container_width=True):
             with st.spinner("Calculando fatiga y probabilidades..."):
                 generar_misiones_del_dia(perfil['id'])
                 st.rerun()
-    else:
-        if epicas:
-            st.write("### 👑 CAMPAÑAS ACTIVAS (LARGO PLAZO)")
-            for mision in epicas:
-                with st.container(border=True):
-                    st.markdown(f"<h4 style='color: #FFD700;'>[{mision['rango']}] {mision['titulo']}</h4>", unsafe_allow_html=True)
-                    st.caption(f"ZONA DE IMPACTO: **{mision.get('zona_muscular', 'N/A').upper()}**")
-                    st.write(mision['descripcion'])
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        if st.button("▶️ CONTINUAR / FINALIZAR", key=f"iniciar_epica_{mision['id']}", use_container_width=True):
-                            st.session_state['mision_activa'] = mision
-                            st.session_state['hora_inicio_mision'] = datetime.datetime.now()
-                            st.rerun()
-                    with col2:
-                        if st.button("❌ Abandonar Campaña", key=f"rech_epica_{mision['id']}", use_container_width=True):
-                            supabase.table("misiones_diarias").delete().eq("id", mision['id']).execute()
-                            st.rerun()
-                            
-        if diarias:
-            st.write("### ⚠️ MISIONES DIARIAS")
-            for mision in diarias:
-                with st.container(border=True):
-                    st.markdown(f"#### [{mision['rango']}] {mision['titulo']}")
-                    st.caption(f"ZONA DE IMPACTO: **{mision.get('zona_muscular', 'N/A').upper()}**")
-                    st.write(mision['descripcion'])
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        if st.button("▶️ INICIAR MISIÓN", key=f"iniciar_{mision['id']}", use_container_width=True):
-                            st.session_state['mision_activa'] = mision
-                            st.session_state['hora_inicio_mision'] = datetime.datetime.now()
-                            st.rerun()
-                    with col2:
-                        if st.button("❌ Rechazar", key=f"rech_{mision['id']}", use_container_width=True):
-                            supabase.table("misiones_diarias").delete().eq("id", mision['id']).execute()
-                            st.rerun()
-                            
-        if completadas:
-            st.write("### 🏆 REGISTRO DE VICTORIAS HOY")
-            for mision in completadas:
-                with st.container(border=True):
-                    st.markdown(f"~~[{mision['rango']}] {mision['titulo']}~~")
-                    tiempo_texto = ""
-                    if mision.get('tiempo_segundos'):
-                        m, s = divmod(mision['tiempo_segundos'], 60)
-                        tiempo_texto = f" | ⏱️ {m}m {s}s | 🔥 {mision.get('nivel_esfuerzo', '')}"
-                    st.success(f"Misión Completada {tiempo_texto}")
+                        
+    if completadas:
+        st.write("### 🏆 REGISTRO DE VICTORIAS HOY")
+        for mision in completadas:
+            with st.container(border=True):
+                st.markdown(f"~~[{mision['rango']}] {mision['titulo']}~~")
+                tiempo_texto = ""
+                if mision.get('tiempo_segundos'):
+                    m, s = divmod(mision['tiempo_segundos'], 60)
+                    tiempo_texto = f" | ⏱️ {m}m {s}s | 🔥 {mision.get('nivel_esfuerzo', '')}"
+                st.success(f"Misión Completada {tiempo_texto}")
