@@ -27,12 +27,9 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-if 'play_level_up' not in st.session_state:
-    st.session_state['play_level_up'] = False
-if 'mision_activa' not in st.session_state:
-    st.session_state['mision_activa'] = None
-if 'hora_inicio_mision' not in st.session_state:
-    st.session_state['hora_inicio_mision'] = None
+if 'play_level_up' not in st.session_state: st.session_state['play_level_up'] = False
+if 'mision_activa' not in st.session_state: st.session_state['mision_activa'] = None
+if 'hora_inicio_mision' not in st.session_state: st.session_state['hora_inicio_mision'] = None
 
 # --- PARCHE DE ZONA HORARIA (ARGENTINA UTC-3) ---
 def get_fecha_hoy():
@@ -100,8 +97,7 @@ def actualizar_racha(jugador_id, perfil):
 # -----------------------------------------------------------------------------
 def obtener_perfil():
     respuesta = supabase.table("perfil_jugador").select("*").limit(1).execute()
-    if respuesta.data:
-        return respuesta.data[0]
+    if respuesta.data: return respuesta.data[0]
     else:
         nuevo_perfil = supabase.table("perfil_jugador").insert({}).execute()
         return nuevo_perfil.data[0]
@@ -133,7 +129,6 @@ def generar_misiones_del_dia(jugador_id):
     misiones_actuales = obtener_misiones_activas(jugador_id)
     hay_epica_intelecto = any(m.get('tipo_mision') == 'epica' and m.get('zona_muscular') == 'intelecto' and m.get('estado') == 'pendiente' for m in misiones_actuales)
     
-    # Leemos ayer y hoy para evitar duplicados
     res_recientes = supabase.table("misiones_diarias").select("*").eq("jugador_id", jugador_id).in_("fecha", [ayer, hoy_str]).execute()
     zonas_fatigadas = [m.get('zona_muscular') for m in res_recientes.data if m.get('zona_muscular') in ['pecho', 'espalda', 'piernas', 'core'] and m.get('fecha') == ayer]
     hizo_caminata_reciente = any(m.get('zona_muscular') == 'caminata' for m in res_recientes.data if m.get('fecha') == ayer)
@@ -145,11 +140,9 @@ def generar_misiones_del_dia(jugador_id):
     epicas_activas = [m for m in misiones_actuales if m.get('tipo_mision') == 'epica' and m.get('estado') == 'pendiente']
     for epica in epicas_activas:
         sub_tareas = epica.get('sub_tareas', [])
-        # Filtrar submisiones que aún no alcanzan su meta
         tareas_pendientes = [t for t in sub_tareas if t.get('completadas', 0) < t.get('repeticiones_necesarias', 1)]
         
         if tareas_pendientes:
-            # Extrae hasta 2 submisiones aleatorias de la campaña para hoy
             tareas_hoy = random.sample(tareas_pendientes, min(2, len(tareas_pendientes)))
             for t in tareas_hoy:
                 titulo_campana = f"[Campaña] {t.get('titulo', 'Sub-misión')}"
@@ -160,7 +153,7 @@ def generar_misiones_del_dia(jugador_id):
                         'categoria': 'especial',
                         'rango': epica.get('rango', 'A'),
                         'zona_muscular': epica.get('zona_muscular', 'general'),
-                        'parent_id': epica['id'], # VINCULACIÓN MAESTRA
+                        'parent_id': epica['id'], 
                         'xp_recompensa_dinamica': t.get('xp_por_vez', 20)
                     })
 
@@ -175,7 +168,7 @@ def generar_misiones_del_dia(jugador_id):
         if tit in misiones_ya_generadas_hoy: continue
         
         if zona == 'intelecto':
-            if hay_epica_intelecto: continue # El supresor de enfoque
+            if hay_epica_intelecto: continue 
             if random.random() <= float(mision['probabilidad_aparicion']):
                 misiones_asignadas.append(mision)
             continue
@@ -220,18 +213,21 @@ def crear_mision_epica_ia(jugador_id, contexto_usuario):
     Actúa estrictamente como el Sistema de Solo Leveling. El jugador solicita una Misión Épica (Campaña Principal) basada en este objetivo: "{contexto_usuario}"
     Debes desglosar esta gran meta en un "Questline" (Sub-misiones rutinarias que deberán repetirse para llenar la meta final).
     
+    [NUEVA REGLA BIOMECÁNICA Y LÓGICA]: 
+    Si la meta es de entrenamiento físico (ej. dominar un ejercicio), NO aísles un solo músculo. Las sub-tareas DEBEN incluir ejercicios complementarios y sinergistas (core para estabilidad, músculos antagonistas como espalda para evitar lesiones de hombro, y piernas) que apoyen a la meta principal. Si es intelectual, abarca distintas ramas que converjan.
+    
     Genera EXACTAMENTE este esquema JSON sin formato markdown, escapando comillas internas:
     {{
       "titulo": "[MISIÓN ÉPICA] Nombre creativo",
-      "descripcion": "Descripción del objetivo final.",
+      "descripcion": "Descripción del objetivo final y por qué requiere un enfoque completo.",
       "rango": "S",
       "zona_muscular": "intelecto",
       "xp_recompensa": 1500,
       "meta_total": 30, 
       "sub_tareas": [
-        {{"titulo": "Conjuntos y Subconjuntos", "descripcion": "Clase teórica de 20 min.", "repeticiones_necesarias": 10, "completadas": 0, "xp_por_vez": 25}},
-        {{"titulo": "Ecuaciones Lineales", "descripcion": "Práctica de 20 min.", "repeticiones_necesarias": 10, "completadas": 0, "xp_por_vez": 25}},
-        {{"titulo": "Informática básica", "descripcion": "Lectura de 10 min.", "repeticiones_necesarias": 10, "completadas": 0, "xp_por_vez": 15}}
+        {{"titulo": "Tarea Principal / Foco", "descripcion": "Desc", "repeticiones_necesarias": 10, "completadas": 0, "xp_por_vez": 25}},
+        {{"titulo": "Trabajo Secundario / Estabilidad", "descripcion": "Desc", "repeticiones_necesarias": 10, "completadas": 0, "xp_por_vez": 25}},
+        {{"titulo": "Músculo Antagonista / Complemento", "descripcion": "Desc", "repeticiones_necesarias": 10, "completadas": 0, "xp_por_vez": 15}}
       ]
     }}
     Asegúrate de que la suma de todas las 'repeticiones_necesarias' de las sub_tareas sea igual a 'meta_total'.
@@ -345,8 +341,8 @@ def analizar_fisico(imagen, peso_actual):
     model = genai.GenerativeModel('gemini-2.5-flash')
     prompt = f"""
     Actúa estrictamente como un Sistema RPG de entrenamiento físico. Analiza esta imagen.
-    El usuario pesa {peso_actual} kg y está entrenando calistenia para dominar 25 dominadas estrictas.
-    Reporte: 1. Musculatura visible (tracción). 2. Consejo técnico. 3. Frase épica.
+    El usuario pesa {peso_actual} kg y entrena calistenia. 
+    Reporte: 1. Musculatura visible. 2. Consejo técnico. 3. Frase épica.
     """
     response = model.generate_content([prompt, imagen])
     return response.text
@@ -402,8 +398,8 @@ with col3:
 st.markdown("---")
 
 with st.expander("🔮 ORÁCULO DEL SISTEMA (Forjar Misión Especial)"):
-    st.write("Dile al Sistema tu gran meta. Él la desglosará en submisiones diarias y anidará el progreso.")
-    prompt_mision = st.text_area("Contexto de la Misión:", placeholder="Ej: Tengo que estudiar 3 libros de 25 páginas para la semana que viene...")
+    st.write("Dile al Sistema tu gran meta. Él la desglosará en submisiones diarias holísticas y anidará el progreso.")
+    prompt_mision = st.text_area("Contexto de la Misión:", placeholder="Ej: Dominar 25 dominadas estrictas, o estudiar 3 libros de 25 páginas para la semana que viene...")
     if st.button("⚡ Forjar Misión con IA"):
         if prompt_mision:
             with st.spinner("Desglosando la meta en el Árbol de Habilidades..."):
@@ -417,7 +413,7 @@ with st.expander("🔮 ORÁCULO DEL SISTEMA (Forjar Misión Especial)"):
 st.markdown("---")
 
 st.subheader("ANÁLISIS ESTRUCTURAL AVANZADO")
-tab_svg, tab_ia = st.tabs(["Holograma", "Escáner (IA)"])
+tab_svg, tab_ia, tab_arbol = st.tabs(["Holograma", "Escáner (IA)", "Árbol de Habilidades"])
 
 with tab_svg:
     META_MUSCULO = 1000.0
@@ -469,6 +465,31 @@ with tab_ia:
     if foto_subida and st.button("👁️ Iniciar Escaneo"):
         with st.spinner("Analizando composición..."):
             st.markdown(f"> *{analizar_fisico(Image.open(foto_subida), peso_input)}*")
+
+with tab_arbol:
+    st.markdown("### EL CAMINO DE LA CALISTENIA (Path of the Monarch)")
+    st.write("Tu progreso estático. El color dorado marca las habilidades que tu Nivel actual te permite dominar.")
+    
+    nivel_actual = perfil['nivel']
+    
+    fases = [
+        {"fase": "🟢 FASE 1: Novato Absoluto (Nv. 1-20)", "desc": "Acondicionamiento base.", "hitos": [(1, "Plancha abdominal 30s"), (5, "Push-ups de rodillas x10"), (10, "Remo invertido"), (12, "Dead hang 1 min"), (15, "1 Push-up estricta"), (20, "Dominada negativa")]},
+        {"fase": "🔵 FASE 2: Principiante (Nv. 21-40)", "desc": "Dominio del 100% de tu peso.", "hitos": [(25, "1 Pull-up estricta"), (30, "Fondos en paralelas x5"), (35, "Pike Push-ups"), (40, "L-Sit 10s")]},
+        {"fase": "🟡 FASE 3: Intermedio (Nv. 41-60)", "desc": "Fuerza atlética superior.", "hitos": [(45, "Pistol Squat"), (50, "Muscle-Up (con impulso)"), (55, "One-arm Push-up"), (60, "Dragon Flag")]},
+        {"fase": "🟠 FASE 4: Avanzado (Nv. 61-80)", "desc": "Isometría severa.", "hitos": [(65, "Muscle-Up estricto"), (70, "Back Lever"), (75, "Wall Handstand Push-ups"), (80, "Front Lever")]},
+        {"fase": "🔴 FASE 5: Élite (Nv. 81-95)", "desc": "Nivel competitivo.", "hitos": [(85, "Freestanding Handstand Push-up"), (90, "One Arm Pull-up (OAP)"), (93, "Straddle Planche"), (95, "Full Planche")]},
+        {"fase": "👑 FASE 6: Profesional / Nivel Dios (Nv. 96-100)", "desc": "Desafío a la física.", "hitos": [(97, "Zanetti (Plancha en anillas)"), (98, "Hefesto"), (99, "Maltese"), (100, "Victorian Cross")]}
+    ]
+    
+    for f in fases:
+        with st.expander(f["fase"], expanded=(nivel_actual >= f["hitos"][0][0] and nivel_actual <= f["hitos"][-1][0])):
+            st.caption(f["desc"])
+            for hito in f["hitos"]:
+                lvl, nombre = hito
+                color = "#FFD700" if nivel_actual >= lvl else "#555"
+                check = "✅" if nivel_actual >= lvl else "🔒"
+                st.markdown(f"<p style='color: {color}; margin: 0;'>{check} <b>Nivel {lvl}:</b> {nombre}</p>", unsafe_allow_html=True)
+
 
 st.markdown("---")
 
