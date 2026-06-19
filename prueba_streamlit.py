@@ -133,30 +133,49 @@ def generar_misiones_del_dia(jugador_id):
     misiones_actuales = obtener_misiones_activas(jugador_id)
     hay_epica_intelecto = any(m.get('tipo_mision') == 'epica' and m.get('zona_muscular') == 'intelecto' and m.get('estado') == 'pendiente' for m in misiones_actuales)
     
-    # Leemos ayer y hoy para evitar duplicados en el mismo día
+    # Leemos ayer y hoy para evitar duplicados
     res_recientes = supabase.table("misiones_diarias").select("*").eq("jugador_id", jugador_id).in_("fecha", [ayer, hoy_str]).execute()
-    
     zonas_fatigadas = [m.get('zona_muscular') for m in res_recientes.data if m.get('zona_muscular') in ['pecho', 'espalda', 'piernas', 'core'] and m.get('fecha') == ayer]
     hizo_caminata_reciente = any(m.get('zona_muscular') == 'caminata' for m in res_recientes.data if m.get('fecha') == ayer)
-    
-    # Registro de lo que ya se generó HOY para no repetirlo
     misiones_ya_generadas_hoy = [m['titulo'] for m in res_recientes.data if m.get('fecha') == hoy_str]
             
-    res_catalogo = supabase.table("diccionario_misiones").select("*").execute()
     misiones_asignadas = []
     
-    # Bloqueamos rutina física si ya se asignó una hoy
+    # --- 1. GENERADOR DE SUB-MISIONES DE CAMPAÑA ---
+    epicas_activas = [m for m in misiones_actuales if m.get('tipo_mision') == 'epica' and m.get('estado') == 'pendiente']
+    for epica in epicas_activas:
+        sub_tareas = epica.get('sub_tareas', [])
+        # Filtrar submisiones que aún no alcanzan su meta
+        tareas_pendientes = [t for t in sub_tareas if t.get('completadas', 0) < t.get('repeticiones_necesarias', 1)]
+        
+        if tareas_pendientes:
+            # Extrae hasta 2 submisiones aleatorias de la campaña para hoy
+            tareas_hoy = random.sample(tareas_pendientes, min(2, len(tareas_pendientes)))
+            for t in tareas_hoy:
+                titulo_campana = f"[Campaña] {t.get('titulo', 'Sub-misión')}"
+                if titulo_campana not in misiones_ya_generadas_hoy:
+                    misiones_asignadas.append({
+                        'titulo': titulo_campana,
+                        'descripcion': t.get('descripcion', ''),
+                        'categoria': 'especial',
+                        'rango': epica.get('rango', 'A'),
+                        'zona_muscular': epica.get('zona_muscular', 'general'),
+                        'parent_id': epica['id'], # VINCULACIÓN MAESTRA
+                        'xp_recompensa_dinamica': t.get('xp_por_vez', 20)
+                    })
+
+    # --- 2. GENERADOR DE MISIONES RUTINARIAS (Diccionario) ---
+    res_catalogo = supabase.table("diccionario_misiones").select("*").execute()
     entrenamiento_pesado_asignado = any(m.get('zona_muscular') in ['pecho', 'espalda', 'piernas', 'core'] for m in res_recientes.data if m.get('fecha') == hoy_str)
     
     for mision in res_catalogo.data:
         tit = mision['titulo']
         zona = mision.get('zona_muscular', 'general')
         
-        # Filtro Anti-Spam: Si ya sacaste esta misión hoy, no la repite
         if tit in misiones_ya_generadas_hoy: continue
         
         if zona == 'intelecto':
-            if hay_epica_intelecto: continue
+            if hay_epica_intelecto: continue # El supresor de enfoque
             if random.random() <= float(mision['probabilidad_aparicion']):
                 misiones_asignadas.append(mision)
             continue
@@ -177,17 +196,20 @@ def generar_misiones_del_dia(jugador_id):
             misiones_asignadas.append(mision)
             entrenamiento_pesado_asignado = True
 
+    # --- 3. INSERCIÓN GLOBAL ---
     for m in misiones_asignadas:
         supabase.table("misiones_diarias").insert({
             "jugador_id": jugador_id,
             "titulo": m['titulo'],
             "descripcion": m['descripcion'],
-            "categoria": m['categoria'],
+            "categoria": m.get('categoria', 'rutina'),
             "rango": m['rango'],
             "zona_muscular": m.get('zona_muscular', 'general'),
             "fecha": hoy_str,
             "estado": "pendiente",
-            "tipo_mision": "diaria"
+            "tipo_mision": "diaria",
+            "parent_id": m.get('parent_id', None),
+            "xp_recompensa_dinamica": m.get('xp_recompensa_dinamica', 0)
         }).execute()
         
     return misiones_asignadas
@@ -195,19 +217,25 @@ def generar_misiones_del_dia(jugador_id):
 def crear_mision_epica_ia(jugador_id, contexto_usuario):
     model = genai.GenerativeModel('gemini-2.5-flash')
     prompt = f"""
-    Actúa estrictamente como el Sistema de Solo Leveling. El jugador solicita una Misión Épica a largo plazo basada en este objetivo: "{contexto_usuario}"
-    Crea una misión de alta jerarquía. Debes estructurar la respuesta en un formato JSON plano y limpio.
+    Actúa estrictamente como el Sistema de Solo Leveling. El jugador solicita una Misión Épica (Campaña Principal) basada en este objetivo: "{contexto_usuario}"
+    Debes desglosar esta gran meta en un "Questline" (Sub-misiones rutinarias que deberán repetirse para llenar la meta final).
     
-    Genera exactamente este esquema JSON (asegúrate de escapar comillas internas):
+    Genera EXACTAMENTE este esquema JSON sin formato markdown, escapando comillas internas:
     {{
-      "titulo": "[MISIÓN ÉPICA] Nombre creativo y épico",
-      "descripcion": "Descripción detallada estilo RPG, desglosando los objetivos.",
+      "titulo": "[MISIÓN ÉPICA] Nombre creativo",
+      "descripcion": "Descripción del objetivo final.",
       "rango": "S",
       "zona_muscular": "intelecto",
-      "xp_recompensa": 500
+      "xp_recompensa": 1500,
+      "meta_total": 30, 
+      "sub_tareas": [
+        {{"titulo": "Conjuntos y Subconjuntos", "descripcion": "Clase teórica de 20 min.", "repeticiones_necesarias": 10, "completadas": 0, "xp_por_vez": 25}},
+        {{"titulo": "Ecuaciones Lineales", "descripcion": "Práctica de 20 min.", "repeticiones_necesarias": 10, "completadas": 0, "xp_por_vez": 25}},
+        {{"titulo": "Informática básica", "descripcion": "Lectura de 10 min.", "repeticiones_necesarias": 10, "completadas": 0, "xp_por_vez": 15}}
+      ]
     }}
-    
-    Responde únicamente el objeto JSON, sin envoltorios de código markdown ni texto adicional.
+    Asegúrate de que la suma de todas las 'repeticiones_necesarias' de las sub_tareas sea igual a 'meta_total'.
+    Responde únicamente el objeto JSON.
     """
     response = model.generate_content(prompt)
     try:
@@ -224,11 +252,14 @@ def crear_mision_epica_ia(jugador_id, contexto_usuario):
             "titulo": datos_mision['titulo'],
             "descripcion": datos_mision['descripcion'],
             "categoria": "especial",
-            "rango": datos_mision.get('rango', 'A'),
+            "rango": datos_mision.get('rango', 'S'),
             "zona_muscular": datos_mision.get('zona_muscular', 'intelecto'),
             "fecha": get_fecha_hoy().isoformat(),
             "estado": "pendiente",
-            "tipo_mision": "epica"
+            "tipo_mision": "epica",
+            "meta_total": datos_mision.get('meta_total', 1),
+            "sub_tareas": datos_mision.get('sub_tareas', []),
+            "xp_recompensa_dinamica": datos_mision.get('xp_recompensa', 1000)
         }).execute()
         return True
     except Exception as e:
@@ -371,14 +402,14 @@ with col3:
 st.markdown("---")
 
 with st.expander("🔮 ORÁCULO DEL SISTEMA (Forjar Misión Especial)"):
-    st.write("Solicita una misión a largo plazo. El Sistema suprimirá las tareas diarias menores de esa rama.")
-    prompt_mision = st.text_area("Contexto de la Misión:", placeholder="Ej: Tengo que estudiar 3 libros de 25 páginas...")
+    st.write("Dile al Sistema tu gran meta. Él la desglosará en submisiones diarias y anidará el progreso.")
+    prompt_mision = st.text_area("Contexto de la Misión:", placeholder="Ej: Tengo que estudiar 3 libros de 25 páginas para la semana que viene...")
     if st.button("⚡ Forjar Misión con IA"):
         if prompt_mision:
-            with st.spinner("La IA está calculando la jerarquía..."):
+            with st.spinner("Desglosando la meta en el Árbol de Habilidades..."):
                 exito = crear_mision_epica_ia(perfil['id'], prompt_mision)
                 if exito:
-                    st.success("Misión Épica registrada.")
+                    st.success("Misión Épica registrada. Extrae tus misiones diarias para obtener tus primeras sub-tareas.")
                     st.rerun()
                 else:
                     st.error("Error de conexión con el Oráculo.")
@@ -485,7 +516,13 @@ if mision_activa:
             tiempo_final = datetime.datetime.now()
             segundos_tardados = int((tiempo_final - st.session_state['hora_inicio_mision']).total_seconds())
             
-            base_xp = mision_activa.get('xp_recompensa', 50)
+            # Cálculo de XP Base
+            if mision_activa.get('parent_id'):
+                base_xp = mision_activa.get('xp_recompensa_dinamica', 20)
+            else:
+                res_dic = supabase.table("diccionario_misiones").select("xp_recompensa").eq("titulo", mision_activa['titulo']).execute()
+                base_xp = res_dic.data[0]['xp_recompensa'] if res_dic.data else 20
+                
             mult_xp = {'Muy Fácil': 0.7, 'Un poco fácil': 0.85, 'Adecuada': 1.0, 'Un poco compleja': 1.15, 'Compleja': 1.3}
             xp_final = int(base_xp * mult_xp[esfuerzo_seleccionado])
             
@@ -494,15 +531,47 @@ if mision_activa:
             
             level_up, nuevo_nivel = otorgar_xp(perfil['id'], xp_final, zona_trabajada)
             
-            # Si era misión épica y se finaliza
-            if mision_activa.get('tipo_mision') == 'epica':
+            # --- LÓGICA DE ACTUALIZACIÓN DE PADRES E HIJOS ---
+            if mision_activa.get('parent_id'):
+                # Es una submisión, actualizar la campaña principal
+                res_parent = supabase.table("misiones_diarias").select("*").eq("id", mision_activa['parent_id']).execute()
+                if res_parent.data:
+                    parent = res_parent.data[0]
+                    sub_tareas = parent.get('sub_tareas', [])
+                    nombre_subtarea = mision_activa['titulo'].replace("[Campaña] ", "")
+                    
+                    # Aumentar completadas en el JSON
+                    for st_task in sub_tareas:
+                        if st_task.get('titulo') == nombre_subtarea:
+                            st_task['completadas'] = st_task.get('completadas', 0) + 1
+                            break
+                    
+                    nuevo_progreso = parent.get('progreso_actual', 0) + 1
+                    meta = parent.get('meta_total', 1)
+                    estado_parent = "completada" if nuevo_progreso >= meta else "pendiente"
+                    
+                    supabase.table("misiones_diarias").update({
+                        "progreso_actual": nuevo_progreso, 
+                        "sub_tareas": sub_tareas, 
+                        "estado": estado_parent
+                    }).eq("id", parent['id']).execute()
+                    
+                    if estado_parent == "completada":
+                        xp_masiva = parent.get('xp_recompensa_dinamica', 1000)
+                        otorgar_xp(perfil['id'], xp_masiva, parent.get('zona_muscular'))
+                        st.session_state['play_level_up'] = True
+                        st.toast(f"👑 ¡CAMPAÑA ÉPICA COMPLETADA! +{xp_masiva} XP Masiva.")
+                        
+            elif mision_activa.get('tipo_mision') == 'epica':
+                # Finalización manual de una épica
                 supabase.table("misiones_diarias").update({
                     "estado": "completada",
                     "tiempo_segundos": segundos_tardados,
                     "nivel_esfuerzo": esfuerzo_seleccionado
                 }).eq("id", mision_activa['id']).execute()
+                
             else:
-                # Misión diaria con Sobrecarga Progresiva
+                # Misión diaria rutinaria con Sobrecarga Progresiva (Diccionario)
                 res_dic = supabase.table("diccionario_misiones").select("*").eq("titulo", mision_activa['titulo']).execute()
                 if res_dic.data and esfuerzo_seleccionado != 'Adecuada':
                     m_base = res_dic.data[0]
@@ -511,11 +580,12 @@ if mision_activa:
                     desc_evo = re.sub(r'00:(\d{2})', lambda m: f"00:{min(max(5, int(int(m.group(1)) * mult_texto)), 59):02d}", desc_evo)
                     supabase.table("diccionario_misiones").update({"descripcion": desc_evo}).eq("titulo", mision_activa['titulo']).execute()
 
-                supabase.table("misiones_diarias").update({
-                    "estado": "completada",
-                    "tiempo_segundos": segundos_tardados,
-                    "nivel_esfuerzo": esfuerzo_seleccionado
-                }).eq("id", mision_activa['id']).execute()
+            # Completar la tarea activa actual
+            supabase.table("misiones_diarias").update({
+                "estado": "completada",
+                "tiempo_segundos": segundos_tardados,
+                "nivel_esfuerzo": esfuerzo_seleccionado
+            }).eq("id", mision_activa['id']).execute()
             
             if level_up:
                 st.session_state['play_level_up'] = True
@@ -541,6 +611,9 @@ else:
     diarias = [m for m in misiones_activas if m.get('tipo_mision') == 'diaria' and m.get('estado') == 'pendiente']
     completadas = [m for m in misiones_activas if m.get('estado') == 'completada' and m.get('fecha') == get_fecha_hoy().isoformat()]
 
+    hoy_str = get_fecha_hoy().isoformat()
+    diarias_generadas_hoy = [m for m in misiones_activas if m.get('tipo_mision') == 'diaria' and m.get('fecha') == hoy_str]
+
     if epicas:
         st.write("### 👑 CAMPAÑAS ACTIVAS (LARGO PLAZO)")
         for mision in epicas:
@@ -548,22 +621,40 @@ else:
                 st.markdown(f"<h4 style='color: #FFD700;'>[{mision['rango']}] {mision['titulo']}</h4>", unsafe_allow_html=True)
                 st.caption(f"ZONA DE IMPACTO: **{mision.get('zona_muscular', 'N/A').upper()}**")
                 st.write(mision['descripcion'])
+                
+                # Barra de progreso anidada
+                prog = mision.get('progreso_actual', 0)
+                meta = mision.get('meta_total', 1)
+                st.progress(prog / meta if meta > 0 else 0, text=f"Progreso de Campaña: {prog} / {meta} Sub-misiones")
+                
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button("▶️ CONTINUAR / FINALIZAR", key=f"iniciar_epica_{mision['id']}", use_container_width=True):
-                        st.session_state['mision_activa'] = mision
-                        st.session_state['hora_inicio_mision'] = datetime.datetime.now()
-                        st.rerun()
+                    # Muestra las tareas JSON pendientes en formato texto para saber qué falta
+                    if st.button("▶️ DETALLES DE CAMPAÑA", key=f"det_{mision['id']}", use_container_width=True):
+                        st.info("Para avanzar en esta Campaña, Extrae las Misiones Diarias del Sistema. Se añadirán sub-tareas automáticamente a tu Quest Board.")
                 with col2:
                     if st.button("❌ Abandonar Campaña", key=f"rech_epica_{mision['id']}", use_container_width=True):
+                        # Elimina primero las sub-misiones vinculadas, luego la campaña
+                        supabase.table("misiones_diarias").delete().eq("parent_id", mision['id']).execute()
                         supabase.table("misiones_diarias").delete().eq("id", mision['id']).execute()
                         st.rerun()
                         
     st.write("### ⚠️ MISIONES DIARIAS")
-    if diarias:
+    if not diarias_generadas_hoy and not diarias:
+        st.info("El Sistema no detecta misiones rutinarias activas.")
+        if st.button("🎲 Extraer Misiones Diarias", use_container_width=True):
+            with st.spinner("Desglosando árbol de habilidades y fatiga..."):
+                generar_misiones_del_dia(perfil['id'])
+                st.rerun()
+    elif diarias:
         for mision in diarias:
             with st.container(border=True):
-                st.markdown(f"#### [{mision['rango']}] {mision['titulo']}")
+                # Resaltamos visualmente si es una sub-misión de campaña
+                if mision.get('parent_id'):
+                    st.markdown(f"<h4 style='color: #00ffcc;'>{mision['titulo']}</h4>", unsafe_allow_html=True)
+                else:
+                    st.markdown(f"#### [{mision['rango']}] {mision['titulo']}")
+                    
                 st.caption(f"ZONA DE IMPACTO: **{mision.get('zona_muscular', 'N/A').upper()}**")
                 st.write(mision['descripcion'])
                 col1, col2 = st.columns(2)
@@ -576,18 +667,12 @@ else:
                     if st.button("❌ Rechazar", key=f"rech_{mision['id']}", use_container_width=True):
                         supabase.table("misiones_diarias").delete().eq("id", mision['id']).execute()
                         st.rerun()
-    else:
-        st.info("El Sistema no detecta misiones rutinarias activas.")
-        if st.button("🎲 Extraer Misiones Diarias", use_container_width=True):
-            with st.spinner("Calculando fatiga y probabilidades..."):
-                generar_misiones_del_dia(perfil['id'])
-                st.rerun()
                         
     if completadas:
         st.write("### 🏆 REGISTRO DE VICTORIAS HOY")
         for mision in completadas:
             with st.container(border=True):
-                st.markdown(f"~~[{mision['rango']}] {mision['titulo']}~~")
+                st.markdown(f"~~[{mision.get('rango', 'C')}] {mision['titulo']}~~")
                 tiempo_texto = ""
                 if mision.get('tiempo_segundos'):
                     m, s = divmod(mision['tiempo_segundos'], 60)
