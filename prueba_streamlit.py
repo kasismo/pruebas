@@ -48,7 +48,7 @@ supabase = init_connection()
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
 # -----------------------------------------------------------------------------
-# MOTORES LÓGICOS: TÍTULOS Y RACHAS
+# MOTORES LÓGICOS: TÍTULOS Y PENALIDAD (PENALTY ZONE)
 # -----------------------------------------------------------------------------
 def calcular_rango_it(xp):
     if xp < 300: return "Novato de UTN"
@@ -68,29 +68,53 @@ def calcular_rango_fisico(xp_total):
     if xp_total < 8000: return "Campeón Olímpico"
     return "Monarca Físico (Clase S)"
 
-def actualizar_racha(jugador_id, perfil):
+def procesar_sistema_penalidad(jugador_id, perfil):
     hoy = get_fecha_hoy()
-    ultima = perfil.get('ultima_conexion')
+    ultima_con_str = perfil.get('ultima_conexion')
     racha_actual = perfil.get('racha_dias', 0)
     
-    if ultima:
-        ultima_fecha = datetime.datetime.strptime(ultima, '%Y-%m-%d').date()
-        diferencia = (hoy - ultima_fecha).days
-        
-        if diferencia == 1:
-            racha_actual += 1
-        elif diferencia > 1:
-            racha_actual = 1
+    # 1. Obtener la última fecha de una misión CONFIRMADA
+    res_comp = supabase.table("misiones_diarias").select("fecha").eq("jugador_id", jugador_id).eq("estado", "completada").order("fecha", desc=True).limit(1).execute()
+    
+    if res_comp.data:
+        ultima_fecha_completada = datetime.datetime.strptime(res_comp.data[0]['fecha'], '%Y-%m-%d').date()
     else:
-        racha_actual = 1
-
-    if ultima != hoy.isoformat():
+        ultima_fecha_completada = hoy # Sin historial, no hay deuda
+        
+    # 2. Inicialización si es la primera vez
+    if not ultima_con_str:
+        supabase.table("perfil_jugador").update({"racha_dias": racha_actual, "ultima_conexion": hoy.isoformat()}).eq("id", jugador_id).execute()
+        return racha_actual, 0
+        
+    ultima_conexion = datetime.datetime.strptime(ultima_con_str, '%Y-%m-%d').date()
+    
+    # 3. Simulador de Cron Job Diario (Solo se evalúa al cambiar de día)
+    if hoy > ultima_conexion:
+        dias_pasados = (hoy - ultima_conexion).days
+        
+        # Iterar por los días que el usuario no abrió la app (o abrió pero era otro día)
+        for i in range(1, dias_pasados + 1):
+            fecha_evaluada = ultima_conexion + timedelta(days=i)
+            # Días ausentes cuenta desde el último reclamo real de misión
+            dias_ausente = (fecha_evaluada - ultima_fecha_completada).days
+            deuda_evaluada = dias_ausente - 1
+            
+            # REGLAS DEL SISTEMA (The System's Penalty)
+            if deuda_evaluada == 3: # 3er día de deuda -> Penalización Fuerte
+                racha_actual = max(0, racha_actual - 2)
+            elif deuda_evaluada > 3: # 4to día en adelante -> Sangrado Constante
+                racha_actual = max(0, racha_actual - 1)
+                
+        # Guardamos el estado actualizado tras aplicar penalizaciones
         supabase.table("perfil_jugador").update({
             "racha_dias": racha_actual,
             "ultima_conexion": hoy.isoformat()
         }).eq("id", jugador_id).execute()
         
-    return racha_actual
+    # 4. Cálculo de la deuda actual para renderizar en la UI visualmente
+    deuda_actual = max(0, (hoy - ultima_fecha_completada).days - 1)
+    
+    return racha_actual, deuda_actual
 
 # -----------------------------------------------------------------------------
 # LÓGICA DE DATOS Y ORÁCULO IA
@@ -136,7 +160,6 @@ def generar_misiones_del_dia(jugador_id):
             
     misiones_asignadas = []
     
-    # --- 1. GENERADOR DE SUB-MISIONES DE CAMPAÑA ---
     epicas_activas = [m for m in misiones_actuales if m.get('tipo_mision') == 'epica' and m.get('estado') == 'pendiente']
     for epica in epicas_activas:
         sub_tareas = epica.get('sub_tareas', [])
@@ -157,7 +180,6 @@ def generar_misiones_del_dia(jugador_id):
                         'xp_recompensa_dinamica': t.get('xp_por_vez', 20)
                     })
 
-    # --- 2. GENERADOR DE MISIONES RUTINARIAS (Diccionario) ---
     res_catalogo = supabase.table("diccionario_misiones").select("*").execute()
     entrenamiento_pesado_asignado = any(m.get('zona_muscular') in ['pecho', 'espalda', 'piernas', 'core'] for m in res_recientes.data if m.get('fecha') == hoy_str)
     
@@ -169,8 +191,7 @@ def generar_misiones_del_dia(jugador_id):
         
         if zona == 'intelecto':
             if hay_epica_intelecto: continue 
-            if random.random() <= float(mision['probabilidad_aparicion']):
-                misiones_asignadas.append(mision)
+            if random.random() <= float(mision['probabilidad_aparicion']): misiones_asignadas.append(mision)
             continue
             
         if zona == 'caminata':
@@ -189,7 +210,6 @@ def generar_misiones_del_dia(jugador_id):
             misiones_asignadas.append(mision)
             entrenamiento_pesado_asignado = True
 
-    # --- 3. INSERCIÓN GLOBAL ---
     for m in misiones_asignadas:
         supabase.table("misiones_diarias").insert({
             "jugador_id": jugador_id,
@@ -259,43 +279,7 @@ def crear_mision_epica_ia(jugador_id, contexto_usuario):
         }).execute()
         return True
     except Exception as e:
-        print(f"Error crítico en Oráculo: {e} | Texto recibido: {response.text}")
         return False
-
-def obtener_horas_totales_youtube(jugador_id):
-    respuesta = supabase.table("historial_youtube").select("duracion_horas").eq("jugador_id", jugador_id).execute()
-    if not respuesta.data: return 0.0
-    return sum(item['duracion_horas'] for item in respuesta.data)
-
-def sincronizar_radar(jugador_id):
-    api_key = st.secrets["YOUTUBE_API_KEY"]
-    playlist_id = st.secrets["YOUTUBE_PLAYLIST_ID"]
-    url_playlist = f"https://www.googleapis.com/youtube/v3/playlistItems?part=contentDetails&maxResults=50&playlistId={playlist_id}&key={api_key}"
-    res_playlist = requests.get(url_playlist).json()
-    if "items" not in res_playlist: return 0 
-    video_ids = [item['contentDetails']['videoId'] for item in res_playlist['items']]
-    res_db = supabase.table("historial_youtube").select("video_id").execute()
-    videos_procesados = [fila['video_id'] for fila in res_db.data]
-    videos_nuevos = [vid for vid in video_ids if vid not in videos_procesados]
-    if not videos_nuevos: return 0 
-    ids_string = ",".join(videos_nuevos)
-    url_videos = f"https://www.googleapis.com/youtube/v3/videos?part=contentDetails,snippet&id={ids_string}&key={api_key}"
-    res_videos = requests.get(url_videos).json()
-    horas_totales_nuevas = 0
-    for item in res_videos.get('items', []):
-        vid_id = item['id']
-        titulo = item['snippet']['title']
-        duracion_iso = item['contentDetails']['duration']
-        horas = re.search(r'(\d+)H', duracion_iso)
-        minutos = re.search(r'(\d+)M', duracion_iso)
-        segundos = re.search(r'(\d+)S', duracion_iso)
-        h = int(horas.group(1)) if horas else 0
-        m = int(minutos.group(1)) if minutos else 0
-        s = int(segundos.group(1)) if segundos else 0
-        duracion_decimal = h + (m / 60) + (s / 3600)
-        horas_totales_nuevas += duracion_decimal
-        supabase.table("historial_youtube").insert({"video_id": vid_id, "titulo": titulo, "duracion_horas": duracion_decimal, "jugador_id": jugador_id}).execute()
-    return round(horas_totales_nuevas, 2)
 
 def otorgar_xp(jugador_id, cantidad_xp, zona_muscular=None):
     res = supabase.table("perfil_jugador").select("*").eq("id", jugador_id).execute()
@@ -351,7 +335,9 @@ def analizar_fisico(imagen, peso_actual):
 # INTERFAZ DE USUARIO (UI)
 # -----------------------------------------------------------------------------
 perfil = obtener_perfil()
-racha_dias = actualizar_racha(perfil['id'], perfil)
+
+# --- VALIDACIÓN DEL PENALTY ZONE ---
+racha_dias, deuda_dias = procesar_sistema_penalidad(perfil['id'], perfil)
 
 rango_it = calcular_rango_it(perfil.get('exp_intelecto', 0))
 xp_total_fisica = perfil.get('exp_pecho',0) + perfil.get('exp_espalda',0) + perfil.get('exp_piernas',0) + perfil.get('exp_core',0)
@@ -362,6 +348,14 @@ with col_head1:
     st.title("STATUS PANEL")
 with col_head2:
     st.markdown(f"<h3 style='text-align: right; color: #E50914;'>🔥 Racha: {racha_dias} Días</h3>", unsafe_allow_html=True)
+    # Lógica Visual de la Deuda
+    if deuda_dias == 1:
+        st.markdown("<p style='text-align: right; color: #FFA500; font-weight: bold;'>⚠️ Deuda: 1 Día (Pausada)</p>", unsafe_allow_html=True)
+    elif deuda_dias == 2:
+        st.markdown("<p style='text-align: right; color: #FF4500; font-weight: bold;'>⚠️ Deuda: 2 Días (Última Oportunidad)</p>", unsafe_allow_html=True)
+    elif deuda_dias >= 3:
+        st.markdown(f"<p style='text-align: right; color: #8B0000; font-weight: bold;'>🩸 PENALTY ZONE (-{deuda_dias - 2} Días Historial)</p>", unsafe_allow_html=True)
+
 st.markdown("---")
 
 if st.session_state['play_level_up']:
@@ -494,7 +488,7 @@ with tab_arbol:
 st.markdown("---")
 
 # -----------------------------------------------------------------------------
-# Sección 4: Misiones Diarias & Modo Combate (UI REESCRITA)
+# Sección 4: Misiones Diarias & Modo Combate
 # -----------------------------------------------------------------------------
 mision_activa = st.session_state.get('mision_activa')
 
@@ -537,6 +531,16 @@ if mision_activa:
             tiempo_final = datetime.datetime.now()
             segundos_tardados = int((tiempo_final - st.session_state['hora_inicio_mision']).total_seconds())
             
+            # --- LÓGICA DE AUMENTO DE RACHA (Solo sube aquí al confirmar esfuerzo) ---
+            hoy_str = get_fecha_hoy().isoformat()
+            res_hoy = supabase.table("misiones_diarias").select("id").eq("jugador_id", perfil['id']).eq("estado", "completada").eq("fecha", hoy_str).execute()
+            es_primera_del_dia = len(res_hoy.data) == 0
+            
+            if es_primera_del_dia:
+                nueva_racha = racha_dias + 1
+                supabase.table("perfil_jugador").update({"racha_dias": nueva_racha}).eq("id", perfil['id']).execute()
+                st.toast(f"🔥 Sistema: ¡Racha aumentada a {nueva_racha} días!", icon="🔥")
+
             # Cálculo de XP Base
             if mision_activa.get('parent_id'):
                 base_xp = mision_activa.get('xp_recompensa_dinamica', 20)
@@ -552,16 +556,13 @@ if mision_activa:
             
             level_up, nuevo_nivel = otorgar_xp(perfil['id'], xp_final, zona_trabajada)
             
-            # --- LÓGICA DE ACTUALIZACIÓN DE PADRES E HIJOS ---
             if mision_activa.get('parent_id'):
-                # Es una submisión, actualizar la campaña principal
                 res_parent = supabase.table("misiones_diarias").select("*").eq("id", mision_activa['parent_id']).execute()
                 if res_parent.data:
                     parent = res_parent.data[0]
                     sub_tareas = parent.get('sub_tareas', [])
                     nombre_subtarea = mision_activa['titulo'].replace("[Campaña] ", "")
                     
-                    # Aumentar completadas en el JSON
                     for st_task in sub_tareas:
                         if st_task.get('titulo') == nombre_subtarea:
                             st_task['completadas'] = st_task.get('completadas', 0) + 1
@@ -584,7 +585,6 @@ if mision_activa:
                         st.toast(f"👑 ¡CAMPAÑA ÉPICA COMPLETADA! +{xp_masiva} XP Masiva.")
                         
             elif mision_activa.get('tipo_mision') == 'epica':
-                # Finalización manual de una épica
                 supabase.table("misiones_diarias").update({
                     "estado": "completada",
                     "tiempo_segundos": segundos_tardados,
@@ -592,7 +592,6 @@ if mision_activa:
                 }).eq("id", mision_activa['id']).execute()
                 
             else:
-                # Misión diaria rutinaria con Sobrecarga Progresiva (Diccionario)
                 res_dic = supabase.table("diccionario_misiones").select("*").eq("titulo", mision_activa['titulo']).execute()
                 if res_dic.data and esfuerzo_seleccionado != 'Adecuada':
                     m_base = res_dic.data[0]
@@ -601,7 +600,7 @@ if mision_activa:
                     desc_evo = re.sub(r'00:(\d{2})', lambda m: f"00:{min(max(5, int(int(m.group(1)) * mult_texto)), 59):02d}", desc_evo)
                     supabase.table("diccionario_misiones").update({"descripcion": desc_evo}).eq("titulo", mision_activa['titulo']).execute()
 
-            # Completar la tarea activa actual
+            # Completar Tarea
             supabase.table("misiones_diarias").update({
                 "estado": "completada",
                 "tiempo_segundos": segundos_tardados,
@@ -643,19 +642,16 @@ else:
                 st.caption(f"ZONA DE IMPACTO: **{mision.get('zona_muscular', 'N/A').upper()}**")
                 st.write(mision['descripcion'])
                 
-                # Barra de progreso anidada
                 prog = mision.get('progreso_actual', 0)
                 meta = mision.get('meta_total', 1)
                 st.progress(prog / meta if meta > 0 else 0, text=f"Progreso de Campaña: {prog} / {meta} Sub-misiones")
                 
                 col1, col2 = st.columns(2)
                 with col1:
-                    # Muestra las tareas JSON pendientes en formato texto para saber qué falta
                     if st.button("▶️ DETALLES DE CAMPAÑA", key=f"det_{mision['id']}", use_container_width=True):
                         st.info("Para avanzar en esta Campaña, Extrae las Misiones Diarias del Sistema. Se añadirán sub-tareas automáticamente a tu Quest Board.")
                 with col2:
                     if st.button("❌ Abandonar Campaña", key=f"rech_epica_{mision['id']}", use_container_width=True):
-                        # Elimina primero las sub-misiones vinculadas, luego la campaña
                         supabase.table("misiones_diarias").delete().eq("parent_id", mision['id']).execute()
                         supabase.table("misiones_diarias").delete().eq("id", mision['id']).execute()
                         st.rerun()
@@ -670,7 +666,6 @@ else:
     elif diarias:
         for mision in diarias:
             with st.container(border=True):
-                # Resaltamos visualmente si es una sub-misión de campaña
                 if mision.get('parent_id'):
                     st.markdown(f"<h4 style='color: #00ffcc;'>{mision['titulo']}</h4>", unsafe_allow_html=True)
                 else:
