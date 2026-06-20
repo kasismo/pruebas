@@ -48,7 +48,7 @@ supabase = init_connection()
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
 # -----------------------------------------------------------------------------
-# MOTORES LÓGICOS: TÍTULOS Y PENALIDAD (PENALTY ZONE)
+# MOTORES LÓGICOS: TÍTULOS Y PENALIDAD CON SANTUARIO
 # -----------------------------------------------------------------------------
 def calcular_rango_it(xp):
     if xp < 300: return "Novato de UTN"
@@ -73,7 +73,10 @@ def procesar_sistema_penalidad(jugador_id, perfil):
     ultima_con_str = perfil.get('ultima_conexion')
     racha_actual = perfil.get('racha_dias', 0)
     
-    # 1. Obtener la última fecha de una misión CONFIRMADA
+    # Función interna para identificar días de Santuario (Miércoles = 2, Sábado = 5)
+    def es_dia_descanso(fecha):
+        return fecha.weekday() in [2, 5]
+        
     res_comp = supabase.table("misiones_diarias").select("fecha").eq("jugador_id", jugador_id).eq("estado", "completada").order("fecha", desc=True).limit(1).execute()
     
     if res_comp.data:
@@ -81,40 +84,55 @@ def procesar_sistema_penalidad(jugador_id, perfil):
     else:
         ultima_fecha_completada = hoy # Sin historial, no hay deuda
         
-    # 2. Inicialización si es la primera vez
     if not ultima_con_str:
         supabase.table("perfil_jugador").update({"racha_dias": racha_actual, "ultima_conexion": hoy.isoformat()}).eq("id", jugador_id).execute()
-        return racha_actual, 0
+        return racha_actual, 0, es_dia_descanso(hoy)
         
     ultima_conexion = datetime.datetime.strptime(ultima_con_str, '%Y-%m-%d').date()
     
-    # 3. Simulador de Cron Job Diario (Solo se evalúa al cambiar de día)
+    # Simulador de Cron Job (Itera por los días ausentes)
     if hoy > ultima_conexion:
         dias_pasados = (hoy - ultima_conexion).days
         
-        # Iterar por los días que el usuario no abrió la app (o abrió pero era otro día)
         for i in range(1, dias_pasados + 1):
             fecha_evaluada = ultima_conexion + timedelta(days=i)
-            # Días ausentes cuenta desde el último reclamo real de misión
-            dias_ausente = (fecha_evaluada - ultima_fecha_completada).days
-            deuda_evaluada = dias_ausente - 1
             
-            # REGLAS DEL SISTEMA (The System's Penalty)
-            if deuda_evaluada == 3: # 3er día de deuda -> Penalización Fuerte
+            # Si el día que estamos evaluando es Miércoles o Sábado, el Sistema duerme
+            if es_dia_descanso(fecha_evaluada):
+                continue
+                
+            # Calculamos cuántos días HÁBILES reales pasaron sin completar misiones
+            deuda_evaluada = 0
+            curr = ultima_fecha_completada + timedelta(days=1)
+            while curr <= fecha_evaluada:
+                if not es_dia_descanso(curr):
+                    deuda_evaluada += 1
+                curr += timedelta(days=1)
+                
+            deuda_penalizable = deuda_evaluada - 1
+            
+            if deuda_penalizable == 3: # 3er día HÁBIL de deuda -> Penalización Fuerte
                 racha_actual = max(0, racha_actual - 2)
-            elif deuda_evaluada > 3: # 4to día en adelante -> Sangrado Constante
+            elif deuda_penalizable > 3: # 4to día HÁBIL en adelante -> Sangrado Constante
                 racha_actual = max(0, racha_actual - 1)
                 
-        # Guardamos el estado actualizado tras aplicar penalizaciones
+        # Guardar penalizaciones en BD
         supabase.table("perfil_jugador").update({
             "racha_dias": racha_actual,
             "ultima_conexion": hoy.isoformat()
         }).eq("id", jugador_id).execute()
         
-    # 4. Cálculo de la deuda actual para renderizar en la UI visualmente
-    deuda_actual = max(0, (hoy - ultima_fecha_completada).days - 1)
+    # Calcular deuda actual efectiva para mostrar en la interfaz (Solo cuenta días hábiles)
+    deuda_actual = 0
+    curr = ultima_fecha_completada + timedelta(days=1)
+    while curr <= hoy:
+        if not es_dia_descanso(curr):
+            deuda_actual += 1
+        curr += timedelta(days=1)
+        
+    deuda_actual = max(0, deuda_actual - 1)
     
-    return racha_actual, deuda_actual
+    return racha_actual, deuda_actual, es_dia_descanso(hoy)
 
 # -----------------------------------------------------------------------------
 # LÓGICA DE DATOS Y ORÁCULO IA
@@ -337,7 +355,7 @@ def analizar_fisico(imagen, peso_actual):
 perfil = obtener_perfil()
 
 # --- VALIDACIÓN DEL PENALTY ZONE ---
-racha_dias, deuda_dias = procesar_sistema_penalidad(perfil['id'], perfil)
+racha_dias, deuda_dias, es_descanso_hoy = procesar_sistema_penalidad(perfil['id'], perfil)
 
 rango_it = calcular_rango_it(perfil.get('exp_intelecto', 0))
 xp_total_fisica = perfil.get('exp_pecho',0) + perfil.get('exp_espalda',0) + perfil.get('exp_piernas',0) + perfil.get('exp_core',0)
@@ -349,7 +367,9 @@ with col_head1:
 with col_head2:
     st.markdown(f"<h3 style='text-align: right; color: #E50914;'>🔥 Racha: {racha_dias} Días</h3>", unsafe_allow_html=True)
     # Lógica Visual de la Deuda
-    if deuda_dias == 1:
+    if es_descanso_hoy:
+        st.markdown("<p style='text-align: right; color: #00ffcc; font-weight: bold;'>🛌 DÍA DE RECUPERACIÓN (Santuario Activo)</p>", unsafe_allow_html=True)
+    elif deuda_dias == 1:
         st.markdown("<p style='text-align: right; color: #FFA500; font-weight: bold;'>⚠️ Deuda: 1 Día (Pausada)</p>", unsafe_allow_html=True)
     elif deuda_dias == 2:
         st.markdown("<p style='text-align: right; color: #FF4500; font-weight: bold;'>⚠️ Deuda: 2 Días (Última Oportunidad)</p>", unsafe_allow_html=True)
