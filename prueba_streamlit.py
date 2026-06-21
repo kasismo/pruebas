@@ -73,7 +73,7 @@ def procesar_sistema_penalidad(jugador_id, perfil):
     ultima_con_str = perfil.get('ultima_conexion')
     racha_actual = perfil.get('racha_dias', 0)
     
-    # Función interna para identificar días de Santuario (Miércoles = 2, Sábado = 5)
+    # Miércoles = 2, Sábado = 5
     def es_dia_descanso(fecha):
         return fecha.weekday() in [2, 5]
         
@@ -82,7 +82,7 @@ def procesar_sistema_penalidad(jugador_id, perfil):
     if res_comp.data:
         ultima_fecha_completada = datetime.datetime.strptime(res_comp.data[0]['fecha'], '%Y-%m-%d').date()
     else:
-        ultima_fecha_completada = hoy # Sin historial, no hay deuda
+        ultima_fecha_completada = hoy 
         
     if not ultima_con_str:
         supabase.table("perfil_jugador").update({"racha_dias": racha_actual, "ultima_conexion": hoy.isoformat()}).eq("id", jugador_id).execute()
@@ -90,18 +90,14 @@ def procesar_sistema_penalidad(jugador_id, perfil):
         
     ultima_conexion = datetime.datetime.strptime(ultima_con_str, '%Y-%m-%d').date()
     
-    # Simulador de Cron Job (Itera por los días ausentes)
     if hoy > ultima_conexion:
         dias_pasados = (hoy - ultima_conexion).days
         
         for i in range(1, dias_pasados + 1):
             fecha_evaluada = ultima_conexion + timedelta(days=i)
-            
-            # Si el día que estamos evaluando es Miércoles o Sábado, el Sistema duerme
             if es_dia_descanso(fecha_evaluada):
                 continue
                 
-            # Calculamos cuántos días HÁBILES reales pasaron sin completar misiones
             deuda_evaluada = 0
             curr = ultima_fecha_completada + timedelta(days=1)
             while curr <= fecha_evaluada:
@@ -111,18 +107,16 @@ def procesar_sistema_penalidad(jugador_id, perfil):
                 
             deuda_penalizable = deuda_evaluada - 1
             
-            if deuda_penalizable == 3: # 3er día HÁBIL de deuda -> Penalización Fuerte
+            if deuda_penalizable == 3:
                 racha_actual = max(0, racha_actual - 2)
-            elif deuda_penalizable > 3: # 4to día HÁBIL en adelante -> Sangrado Constante
+            elif deuda_penalizable > 3:
                 racha_actual = max(0, racha_actual - 1)
                 
-        # Guardar penalizaciones en BD
         supabase.table("perfil_jugador").update({
             "racha_dias": racha_actual,
             "ultima_conexion": hoy.isoformat()
         }).eq("id", jugador_id).execute()
         
-    # Calcular deuda actual efectiva para mostrar en la interfaz (Solo cuenta días hábiles)
     deuda_actual = 0
     curr = ultima_fecha_completada + timedelta(days=1)
     while curr <= hoy:
@@ -164,79 +158,47 @@ def generar_misiones_del_dia(jugador_id):
     ayer = (hoy - timedelta(days=1)).isoformat()
     hoy_str = hoy.isoformat()
     
-    perfil = obtener_perfil()
-    semana_actual = perfil.get('semana_actual', 1)
-    barra_desbloqueada = perfil.get('barra_calistenia_desbloqueada', False)
-    
     misiones_actuales = obtener_misiones_activas(jugador_id)
-    hay_epica_intelecto = any(m.get('tipo_mision') == 'epica' and m.get('zona_muscular') == 'intelecto' and m.get('estado') == 'pendiente' for m in misiones_actuales)
-    
     res_recientes = supabase.table("misiones_diarias").select("*").eq("jugador_id", jugador_id).in_("fecha", [ayer, hoy_str]).execute()
-    zonas_fatigadas = [m.get('zona_muscular') for m in res_recientes.data if m.get('zona_muscular') in ['pecho', 'espalda', 'piernas', 'core'] and m.get('fecha') == ayer]
-    hizo_caminata_reciente = any(m.get('zona_muscular') == 'caminata' for m in res_recientes.data if m.get('fecha') == ayer)
     misiones_ya_generadas_hoy = [m['titulo'] for m in res_recientes.data if m.get('fecha') == hoy_str]
             
     misiones_asignadas = []
     
+    # 100% ENFOQUE EN CAMPAÑAS (Se elimina el generador aleatorio de rutina)
     epicas_activas = [m for m in misiones_actuales if m.get('tipo_mision') == 'epica' and m.get('estado') == 'pendiente']
+    
     for epica in epicas_activas:
         sub_tareas = epica.get('sub_tareas', [])
+        # Buscar tareas que aún necesitan repeticiones
         tareas_pendientes = [t for t in sub_tareas if t.get('completadas', 0) < t.get('repeticiones_necesarias', 1)]
         
         if tareas_pendientes:
-            # --- NUEVA LÓGICA DE SECUENCIACIÓN INTELIGENTE ---
+            # Determinamos si es un progreso estrictamente lineal o agrupado
             es_lineal = any("Fase" in t.get('titulo', '') or "Nivel" in t.get('titulo', '') for t in sub_tareas)
             
             if es_lineal:
-                # Modo Secuencial: Extrae ESTRICTAMENTE la primera tarea pendiente
-                tarea_hoy = tareas_pendientes[0]
+                # MODO LINEAL: Extrae STRICTAMENTE la fase actual (1 tarea)
+                tareas_hoy = [tareas_pendientes[0]]
             else:
-                # Modo Holístico: Extrae una al azar para variar el estímulo
-                tarea_hoy = random.choice(tareas_pendientes)
+                # MODO HOLÍSTICO: Extrae hasta 2 tareas aleatorias (Ej. 2 clases de UTN)
+                tareas_hoy = random.sample(tareas_pendientes, min(2, len(tareas_pendientes)))
                 
-            titulo_campana = f"[Campaña] {tarea_hoy.get('titulo', 'Sub-misión')}"
-            
-            if titulo_campana not in misiones_ya_generadas_hoy:
-                misiones_asignadas.append({
-                    'titulo': titulo_campana,
-                    'descripcion': tarea_hoy.get('descripcion', ''),
-                    'categoria': 'especial',
-                    'rango': epica.get('rango', 'A'),
-                    'zona_muscular': epica.get('zona_muscular', 'general'),
-                    'parent_id': epica['id'], 
-                    'xp_recompensa_dinamica': tarea_hoy.get('xp_por_vez', 20)
-                })
+            for t in tareas_hoy:
+                titulo_campana = f"[Campaña] {t.get('titulo', 'Sub-misión')}"
+                
+                # Anti-Spam de extracción
+                if titulo_campana not in misiones_ya_generadas_hoy:
+                    misiones_asignadas.append({
+                        'titulo': titulo_campana,
+                        'descripcion': t.get('descripcion', ''),
+                        'categoria': 'especial',
+                        'rango': epica.get('rango', 'A'),
+                        'zona_muscular': epica.get('zona_muscular', 'general'),
+                        'parent_id': epica['id'], 
+                        'xp_recompensa_dinamica': t.get('xp_por_vez', 20)
+                    })
 
-    res_catalogo = supabase.table("diccionario_misiones").select("*").execute()
-    entrenamiento_pesado_asignado = any(m.get('zona_muscular') in ['pecho', 'espalda', 'piernas', 'core'] for m in res_recientes.data if m.get('fecha') == hoy_str)
-    
-    for mision in res_catalogo.data:
-        tit = mision['titulo']
-        zona = mision.get('zona_muscular', 'general')
-        
-        if tit in misiones_ya_generadas_hoy: continue
-        
-        if zona == 'intelecto':
-            if hay_epica_intelecto: continue 
-            if random.random() <= float(mision['probabilidad_aparicion']): misiones_asignadas.append(mision)
-            continue
-            
-        if zona == 'caminata':
-            if "Semana 1" in tit and semana_actual != 1: continue
-            if "Semana 2" in tit and semana_actual != 2: continue
-            if "Semana 3" in tit and semana_actual != 3: continue
-            if semana_actual in [1, 2] and hizo_caminata_reciente: continue 
-            misiones_asignadas.append(mision)
-            continue
-            
-        if "Suspensión" in tit and not barra_desbloqueada: continue
-        if zona in zonas_fatigadas: continue
-        if entrenamiento_pesado_asignado: continue
-            
-        if random.random() <= float(mision['probabilidad_aparicion']):
-            misiones_asignadas.append(mision)
-            entrenamiento_pesado_asignado = True
-
+    # Guardar las extracciones en la BD
     for m in misiones_asignadas:
         supabase.table("misiones_diarias").insert({
             "jugador_id": jugador_id,
@@ -261,7 +223,7 @@ def crear_mision_epica_ia(jugador_id, contexto_usuario):
     Debes desglosar esta gran meta en un "Questline" (Sub-misiones rutinarias que deberán repetirse para llenar la meta final).
     
     [NUEVA REGLA BIOMECÁNICA Y LÓGICA]: 
-    Si la meta es de entrenamiento físico (ej. dominar un ejercicio), NO aísles un solo músculo. Las sub-tareas DEBEN incluir ejercicios complementarios y sinergistas (core para estabilidad, músculos antagonistas como espalda para evitar lesiones de hombro, y piernas) que apoyen a la meta principal. Si es intelectual, abarca distintas ramas que converjan.
+    Si la meta es de entrenamiento físico (ej. dominar un ejercicio), NO aísles un solo músculo. Las sub-tareas DEBEN incluir ejercicios complementarios y sinergistas. Si es intelectual, abarca distintas ramas que converjan.
     
     Genera EXACTAMENTE este esquema JSON sin formato markdown, escapando comillas internas:
     {{
@@ -273,8 +235,7 @@ def crear_mision_epica_ia(jugador_id, contexto_usuario):
       "meta_total": 30, 
       "sub_tareas": [
         {{"titulo": "Tarea Principal / Foco", "descripcion": "Desc", "repeticiones_necesarias": 10, "completadas": 0, "xp_por_vez": 25}},
-        {{"titulo": "Trabajo Secundario / Estabilidad", "descripcion": "Desc", "repeticiones_necesarias": 10, "completadas": 0, "xp_por_vez": 25}},
-        {{"titulo": "Músculo Antagonista / Complemento", "descripcion": "Desc", "repeticiones_necesarias": 10, "completadas": 0, "xp_por_vez": 15}}
+        {{"titulo": "Trabajo Secundario / Estabilidad", "descripcion": "Desc", "repeticiones_necesarias": 10, "completadas": 0, "xp_por_vez": 25}}
       ]
     }}
     Asegúrate de que la suma de todas las 'repeticiones_necesarias' de las sub_tareas sea igual a 'meta_total'.
@@ -363,7 +324,7 @@ def analizar_fisico(imagen, peso_actual):
 # -----------------------------------------------------------------------------
 perfil = obtener_perfil()
 
-# --- VALIDACIÓN DEL PENALTY ZONE ---
+# --- VALIDACIÓN DEL PENALTY ZONE Y DESCANSOS ---
 racha_dias, deuda_dias, es_descanso_hoy = procesar_sistema_penalidad(perfil['id'], perfil)
 
 rango_it = calcular_rango_it(perfil.get('exp_intelecto', 0))
@@ -375,7 +336,6 @@ with col_head1:
     st.title("STATUS PANEL")
 with col_head2:
     st.markdown(f"<h3 style='text-align: right; color: #E50914;'>🔥 Racha: {racha_dias} Días</h3>", unsafe_allow_html=True)
-    # Lógica Visual de la Deuda
     if es_descanso_hoy:
         st.markdown("<p style='text-align: right; color: #00ffcc; font-weight: bold;'>🛌 DÍA DE RECUPERACIÓN (Santuario Activo)</p>", unsafe_allow_html=True)
     elif deuda_dias == 1:
@@ -422,7 +382,7 @@ st.markdown("---")
 
 with st.expander("🔮 ORÁCULO DEL SISTEMA (Forjar Misión Especial)"):
     st.write("Dile al Sistema tu gran meta. Él la desglosará en submisiones diarias holísticas y anidará el progreso.")
-    prompt_mision = st.text_area("Contexto de la Misión:", placeholder="Ej: Dominar 25 dominadas estrictas, o estudiar 3 libros de 25 páginas para la semana que viene...")
+    prompt_mision = st.text_area("Contexto de la Misión:", placeholder="Ej: Dominar 40 flexiones estrictas...")
     if st.button("⚡ Forjar Misión con IA"):
         if prompt_mision:
             with st.spinner("Desglosando la meta en el Árbol de Habilidades..."):
@@ -513,7 +473,6 @@ with tab_arbol:
                 check = "✅" if nivel_actual >= lvl else "🔒"
                 st.markdown(f"<p style='color: {color}; margin: 0;'>{check} <b>Nivel {lvl}:</b> {nombre}</p>", unsafe_allow_html=True)
 
-
 st.markdown("---")
 
 # -----------------------------------------------------------------------------
@@ -560,7 +519,6 @@ if mision_activa:
             tiempo_final = datetime.datetime.now()
             segundos_tardados = int((tiempo_final - st.session_state['hora_inicio_mision']).total_seconds())
             
-            # --- LÓGICA DE AUMENTO DE RACHA (Solo sube aquí al confirmar esfuerzo) ---
             hoy_str = get_fecha_hoy().isoformat()
             res_hoy = supabase.table("misiones_diarias").select("id").eq("jugador_id", perfil['id']).eq("estado", "completada").eq("fecha", hoy_str).execute()
             es_primera_del_dia = len(res_hoy.data) == 0
@@ -570,12 +528,10 @@ if mision_activa:
                 supabase.table("perfil_jugador").update({"racha_dias": nueva_racha}).eq("id", perfil['id']).execute()
                 st.toast(f"🔥 Sistema: ¡Racha aumentada a {nueva_racha} días!", icon="🔥")
 
-            # Cálculo de XP Base
             if mision_activa.get('parent_id'):
                 base_xp = mision_activa.get('xp_recompensa_dinamica', 20)
             else:
-                res_dic = supabase.table("diccionario_misiones").select("xp_recompensa").eq("titulo", mision_activa['titulo']).execute()
-                base_xp = res_dic.data[0]['xp_recompensa'] if res_dic.data else 20
+                base_xp = 20
                 
             mult_xp = {'Muy Fácil': 0.7, 'Un poco fácil': 0.85, 'Adecuada': 1.0, 'Un poco compleja': 1.15, 'Compleja': 1.3}
             xp_final = int(base_xp * mult_xp[esfuerzo_seleccionado])
@@ -619,15 +575,6 @@ if mision_activa:
                     "tiempo_segundos": segundos_tardados,
                     "nivel_esfuerzo": esfuerzo_seleccionado
                 }).eq("id", mision_activa['id']).execute()
-                
-            else:
-                res_dic = supabase.table("diccionario_misiones").select("*").eq("titulo", mision_activa['titulo']).execute()
-                if res_dic.data and esfuerzo_seleccionado != 'Adecuada':
-                    m_base = res_dic.data[0]
-                    mult_texto = {'Muy Fácil': 1.25, 'Un poco fácil': 1.10, 'Un poco compleja': 1.0, 'Compleja': 0.85}[esfuerzo_seleccionado]
-                    desc_evo = re.sub(r'x(\d+)', lambda m: f"x{max(1, int(int(m.group(1)) * mult_texto))}", m_base['descripcion'])
-                    desc_evo = re.sub(r'00:(\d{2})', lambda m: f"00:{min(max(5, int(int(m.group(1)) * mult_texto)), 59):02d}", desc_evo)
-                    supabase.table("diccionario_misiones").update({"descripcion": desc_evo}).eq("titulo", mision_activa['titulo']).execute()
 
             # Completar Tarea
             supabase.table("misiones_diarias").update({
@@ -685,10 +632,10 @@ else:
                         supabase.table("misiones_diarias").delete().eq("id", mision['id']).execute()
                         st.rerun()
                         
-    st.write("### ⚠️ MISIONES DIARIAS")
+    st.write("### ⚠️ MISIONES DIARIAS (OBJETIVOS DE CAMPAÑA)")
     if not diarias_generadas_hoy and not diarias:
-        st.info("El Sistema no detecta misiones rutinarias activas.")
-        if st.button("🎲 Extraer Misiones Diarias", use_container_width=True):
+        st.info("El Sistema no detecta objetivos activos para hoy.")
+        if st.button("🎲 Extraer Objetivos", use_container_width=True):
             with st.spinner("Desglosando árbol de habilidades y fatiga..."):
                 generar_misiones_del_dia(perfil['id'])
                 st.rerun()
