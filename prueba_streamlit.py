@@ -184,19 +184,28 @@ def generar_misiones_del_dia(jugador_id):
         tareas_pendientes = [t for t in sub_tareas if t.get('completadas', 0) < t.get('repeticiones_necesarias', 1)]
         
         if tareas_pendientes:
-            tareas_hoy = random.sample(tareas_pendientes, min(2, len(tareas_pendientes)))
-            for t in tareas_hoy:
-                titulo_campana = f"[Campaña] {t.get('titulo', 'Sub-misión')}"
-                if titulo_campana not in misiones_ya_generadas_hoy:
-                    misiones_asignadas.append({
-                        'titulo': titulo_campana,
-                        'descripcion': t.get('descripcion', ''),
-                        'categoria': 'especial',
-                        'rango': epica.get('rango', 'A'),
-                        'zona_muscular': epica.get('zona_muscular', 'general'),
-                        'parent_id': epica['id'], 
-                        'xp_recompensa_dinamica': t.get('xp_por_vez', 20)
-                    })
+            # --- NUEVA LÓGICA DE SECUENCIACIÓN INTELIGENTE ---
+            es_lineal = any("Fase" in t.get('titulo', '') or "Nivel" in t.get('titulo', '') for t in sub_tareas)
+            
+            if es_lineal:
+                # Modo Secuencial: Extrae ESTRICTAMENTE la primera tarea pendiente
+                tarea_hoy = tareas_pendientes[0]
+            else:
+                # Modo Holístico: Extrae una al azar para variar el estímulo
+                tarea_hoy = random.choice(tareas_pendientes)
+                
+            titulo_campana = f"[Campaña] {tarea_hoy.get('titulo', 'Sub-misión')}"
+            
+            if titulo_campana not in misiones_ya_generadas_hoy:
+                misiones_asignadas.append({
+                    'titulo': titulo_campana,
+                    'descripcion': tarea_hoy.get('descripcion', ''),
+                    'categoria': 'especial',
+                    'rango': epica.get('rango', 'A'),
+                    'zona_muscular': epica.get('zona_muscular', 'general'),
+                    'parent_id': epica['id'], 
+                    'xp_recompensa_dinamica': tarea_hoy.get('xp_por_vez', 20)
+                })
 
     res_catalogo = supabase.table("diccionario_misiones").select("*").execute()
     entrenamiento_pesado_asignado = any(m.get('zona_muscular') in ['pecho', 'espalda', 'piernas', 'core'] for m in res_recientes.data if m.get('fecha') == hoy_str)
