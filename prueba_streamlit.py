@@ -308,16 +308,48 @@ def aplicar_modificador_esfuerzo(texto, esfuerzo):
     texto_mod = re.sub(r'00:(\d{2})', time_replacer, texto_mod)
     return texto_mod
 
-def analizar_fisico(imagen, peso_actual):
-    imagen.thumbnail((800, 800))
+# --- NUEVO MOTOR DE VISIÓN IA MULTI-IMAGEN ---
+def analizar_fisico(imagenes, peso_actual):
     model = genai.GenerativeModel('gemini-2.5-flash')
-    prompt = f"""
-    Actúa estrictamente como un Sistema RPG de entrenamiento físico. Analiza esta imagen.
-    El usuario pesa {peso_actual} kg y entrena calistenia. 
-    Reporte: 1. Musculatura visible. 2. Consejo técnico. 3. Frase épica.
-    """
-    response = model.generate_content([prompt, imagen])
-    return response.text
+    
+    # Bypass para evitar errores de bloqueo NSFW por detectar piel/torsos en apps de fitness
+    safety_settings = [
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    ]
+    
+    processed_images = []
+    for img in imagenes:
+        img.thumbnail((800, 800))
+        processed_images.append(img)
+        
+    if len(processed_images) == 1:
+        prompt = f"""
+        Actúa estrictamente como un Sistema RPG de entrenamiento físico. Analiza esta imagen.
+        El usuario pesa {peso_actual} kg y entrena calistenia. 
+        Reporte: 1. Musculatura visible. 2. Consejo técnico. 3. Frase épica.
+        """
+    else:
+        prompt = f"""
+        Actúa estrictamente como un Sistema RPG de entrenamiento físico. Analiza estas {len(processed_images)} imágenes subidas por el usuario tomadas en diferentes momentos.
+        El usuario pesa {peso_actual} kg y entrena calistenia. 
+        Compara las imágenes y genera un reporte de progreso que incluya:
+        1. Diferencias o mejoras notables en la composición corporal y densidad muscular.
+        2. Puntos fuertes a mantener y áreas de oportunidad a trabajar de cara al futuro.
+        3. Frase épica del Sistema reconociendo la evolución de nivel.
+        """
+        
+    contents = [prompt] + processed_images
+    
+    try:
+        response = model.generate_content(contents, safety_settings=safety_settings)
+        # Forzamos la lectura para atrapar el ValueError si fue bloqueado por otros motivos
+        texto = response.text 
+        return texto
+    except ValueError:
+        return "⚠️ ALERTA DEL SISTEMA: El escáner visual fue bloqueado por los protocolos de seguridad de la IA de Google (posible exceso de piel descubierta). Por favor, intenta con otra foto que muestre mejor el contexto deportivo."
+    except Exception as e:
+        return f"⚠️ Error de conexión con el satélite escáner: {e}"
 
 # -----------------------------------------------------------------------------
 # INTERFAZ DE USUARIO (UI)
@@ -396,7 +428,7 @@ with st.expander("🔮 ORÁCULO DEL SISTEMA (Forjar Misión Especial)"):
 st.markdown("---")
 
 st.subheader("ANÁLISIS ESTRUCTURAL AVANZADO")
-tab_svg, tab_ia, tab_arbol = st.tabs(["Holograma", "Escáner (IA)", "Árbol de Habilidades"])
+tab_svg, tab_ia, tab_arbol = st.tabs(["Holograma", "Escáner de Progreso (IA)", "Árbol de Habilidades"])
 
 with tab_svg:
     META_MUSCULO = 1000.0
@@ -443,11 +475,15 @@ with tab_svg:
         st.markdown(svg_cuerpo, unsafe_allow_html=True)
 
 with tab_ia:
-    foto_subida = st.file_uploader("Subir foto del torso", type=['jpg', 'jpeg', 'png'])
+    st.write("Sube una foto actual para evaluación, o selecciona **múltiples fotos** tomadas a lo largo del tiempo para que el Sistema compare tu progreso.")
+    fotos_subidas = st.file_uploader("Subir fotos del torso", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
     peso_input = st.number_input("Peso actual (kg):", min_value=50.0, max_value=150.0, value=102.0)
-    if foto_subida and st.button("👁️ Iniciar Escaneo"):
-        with st.spinner("Analizando composición..."):
-            st.markdown(f"> *{analizar_fisico(Image.open(foto_subida), peso_input)}*")
+    
+    if fotos_subidas and st.button("👁️ Iniciar Escaneo de Progreso"):
+        with st.spinner("Analizando composición y cruzando datos temporales..."):
+            imagenes_abiertas = [Image.open(f) for f in fotos_subidas]
+            resultado_ia = analizar_fisico(imagenes_abiertas, peso_input)
+            st.markdown(f"> *{resultado_ia}*")
 
 with tab_arbol:
     st.markdown("### EL CAMINO DE LA CALISTENIA (Path of the Monarch)")
@@ -576,7 +612,6 @@ if mision_activa:
                     "nivel_esfuerzo": esfuerzo_seleccionado
                 }).eq("id", mision_activa['id']).execute()
 
-            # Completar Tarea
             supabase.table("misiones_diarias").update({
                 "estado": "completada",
                 "tiempo_segundos": segundos_tardados,
