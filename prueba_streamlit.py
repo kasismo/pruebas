@@ -256,46 +256,47 @@ def crear_mision_ia(jugador_id, contexto_usuario, tipo="epica"):
         
     response = model.generate_content(prompt)
     try:
-        texto_api = response.text.strip()
-        if "```" in texto_api:
-            texto_api = texto_api.split("```")[1]
-            if texto_api.startswith("json"):
-                texto_api = texto_api[4:]
-        texto_api = texto_api.strip()
-        datos_mision = json.loads(texto_api)
+        # EXTRACCIÓN BLINDADA (Regex busca únicamente el bloque JSON, ignora todo el texto extra)
+        match = re.search(r'\{.*\}', response.text, re.DOTALL)
+        if not match:
+            return False, f"La IA no devolvió un formato JSON válido. Respuesta: {response.text}"
+            
+        texto_limpio = match.group(0)
+        datos_mision = json.loads(texto_limpio)
         
         if tipo == "epica":
             supabase.table("misiones_diarias").insert({
                 "jugador_id": jugador_id,
-                "titulo": datos_mision['titulo'],
-                "descripcion": datos_mision['descripcion'],
+                "titulo": datos_mision.get('titulo', '[MISIÓN ÉPICA]'),
+                "descripcion": datos_mision.get('descripcion', ''),
                 "categoria": "especial",
                 "rango": datos_mision.get('rango', 'S'),
                 "zona_muscular": datos_mision.get('zona_muscular', 'intelecto'),
                 "fecha": get_fecha_hoy().isoformat(),
                 "estado": "pendiente",
                 "tipo_mision": "epica",
-                "meta_total": datos_mision.get('meta_total', 1),
+                "meta_total": int(datos_mision.get('meta_total', 1)),
                 "sub_tareas": datos_mision.get('sub_tareas', []),
-                "xp_recompensa_dinamica": datos_mision.get('xp_recompensa', 1000)
+                "xp_recompensa_dinamica": int(datos_mision.get('xp_recompensa', 1000))
             }).execute()
         else: # Simple
             supabase.table("misiones_diarias").insert({
                 "jugador_id": jugador_id,
-                "titulo": datos_mision['titulo'],
-                "descripcion": datos_mision['descripcion'],
-                "categoria": "rutina",
+                "titulo": datos_mision.get('titulo', '[DIARIA] Tarea'),
+                "descripcion": datos_mision.get('descripcion', ''),
+                "categoria": "especial", # Cambiado a 'especial' para evitar rechazos de base de datos
                 "rango": datos_mision.get('rango', 'C'),
                 "zona_muscular": datos_mision.get('zona_muscular', 'intelecto'),
                 "fecha": get_fecha_hoy().isoformat(),
                 "estado": "pendiente",
-                "tipo_mision": "diaria", # Aparecerá directo en el bloque de diarias
-                "xp_recompensa_dinamica": datos_mision.get('xp_recompensa', 40)
+                "tipo_mision": "diaria", 
+                "xp_recompensa_dinamica": int(datos_mision.get('xp_recompensa', 40))
             }).execute()
             
-        return True
+        return True, ""
     except Exception as e:
-        return False
+        # Si falla algo (tipo de dato, clave, BD), devolvemos el error exacto para verlo en pantalla
+        return False, str(e)
 
 def otorgar_xp(jugador_id, cantidad_xp, zona_muscular=None):
     res = supabase.table("perfil_jugador").select("*").eq("id", jugador_id).execute()
@@ -447,7 +448,7 @@ with st.expander("🔮 ORÁCULO DEL SISTEMA (Forjar Misiones y Campañas)"):
         if prompt_mision:
             with st.spinner("El Sistema está forjando tu destino..."):
                 tipo_param = "simple" if "Simple" in tipo_mision else "epica"
-                exito = crear_mision_ia(perfil['id'], prompt_mision, tipo=tipo_param)
+                exito, msg_error = crear_mision_ia(perfil['id'], prompt_mision, tipo=tipo_param)
                 if exito:
                     if tipo_param == "simple":
                         st.success("Misión Diaria inyectada. Ya puedes verla en tu Quest Board de hoy.")
@@ -455,7 +456,7 @@ with st.expander("🔮 ORÁCULO DEL SISTEMA (Forjar Misiones y Campañas)"):
                         st.success("Misión Épica registrada. Extrae tus misiones diarias para obtener tus primeras sub-tareas.")
                     st.rerun()
                 else:
-                    st.error("Error de conexión con el Oráculo.")
+                    st.error(f"Error devuelto por el Oráculo: {msg_error}")
 
 st.markdown("---")
 
