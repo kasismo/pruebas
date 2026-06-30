@@ -129,7 +129,7 @@ def procesar_sistema_penalidad(jugador_id, perfil):
     return racha_actual, deuda_actual, es_dia_descanso(hoy)
 
 # -----------------------------------------------------------------------------
-# LÓGICA DE DATOS Y ORÁCULO IA DUAL (ÉPICO Y SIMPLE)
+# LÓGICA DE DATOS Y ORÁCULO IA
 # -----------------------------------------------------------------------------
 def obtener_perfil():
     respuesta = supabase.table("perfil_jugador").select("*").limit(1).execute()
@@ -140,13 +140,14 @@ def obtener_perfil():
 
 def obtener_misiones_activas(jugador_id):
     hoy = get_fecha_hoy().isoformat()
+    manana = (get_fecha_hoy() + timedelta(days=1)).isoformat()
     respuesta = supabase.table("misiones_diarias").select("*").eq("jugador_id", jugador_id).execute()
     
     misiones_mostrar = []
     for m in respuesta.data:
         if m.get('tipo_mision') == 'epica' and m.get('estado') == 'pendiente':
             misiones_mostrar.append(m)
-        elif m.get('tipo_mision') == 'diaria' and m['fecha'] == hoy:
+        elif m.get('tipo_mision') == 'diaria' and m['fecha'] in [hoy, manana]: # Detecta hoy y mañana
             misiones_mostrar.append(m)
         elif m.get('estado') == 'completada' and m['fecha'] == hoy:
             misiones_mostrar.append(m) 
@@ -164,7 +165,6 @@ def generar_misiones_del_dia(jugador_id):
             
     misiones_asignadas = []
     
-    # ENFOQUE EN CAMPAÑAS
     epicas_activas = [m for m in misiones_actuales if m.get('tipo_mision') == 'epica' and m.get('estado') == 'pendiente']
     
     for epica in epicas_activas:
@@ -236,16 +236,16 @@ def crear_mision_ia(jugador_id, contexto_usuario, tipo="epica"):
         }}
         Asegúrate de que la suma de repeticiones de las sub_tareas sea igual a meta_total. Responde solo el JSON.
         """
-    else: # Misión Simple Diaria
+    else: # Misión Simple Diaria (Hoy o Mañana)
         prompt = f"""
-        Actúa estrictamente como el Sistema de Solo Leveling. El jugador solicita una Misión Diaria Simple (una tarea rápida para completar HOY) basada en este contexto: "{contexto_usuario}"
+        Actúa estrictamente como el Sistema de Solo Leveling. El jugador solicita una Misión Simple de un solo uso basada en este contexto: "{contexto_usuario}"
         
-        Esta misión NO tendrá sub-tareas ni será una campaña. Será una misión directa de un solo uso para autorregular la carga cognitiva o física del día.
+        Esta misión NO tendrá sub-tareas ni será una campaña. Será una misión directa de un solo uso para autorregular la carga cognitiva o física.
         
         Genera EXACTAMENTE este esquema JSON plano sin formato markdown:
         {{
           "titulo": "[DIARIA] Nombre de la tarea",
-          "descripcion": "Descripción concisa de la tarea a realizar hoy.",
+          "descripcion": "Descripción concisa de la tarea a realizar.",
           "rango": "C", 
           "zona_muscular": "intelecto",
           "xp_recompensa": 40
@@ -256,7 +256,7 @@ def crear_mision_ia(jugador_id, contexto_usuario, tipo="epica"):
         
     response = model.generate_content(prompt)
     try:
-        # EXTRACCIÓN BLINDADA (Regex busca únicamente el bloque JSON, ignora todo el texto extra)
+        # EXTRACCIÓN BLINDADA (Regex)
         match = re.search(r'\{.*\}', response.text, re.DOTALL)
         if not match:
             return False, f"La IA no devolvió un formato JSON válido. Respuesta: {response.text}"
@@ -279,15 +279,19 @@ def crear_mision_ia(jugador_id, contexto_usuario, tipo="epica"):
                 "sub_tareas": datos_mision.get('sub_tareas', []),
                 "xp_recompensa_dinamica": int(datos_mision.get('xp_recompensa', 1000))
             }).execute()
-        else: # Simple
+        else: # Simple o Mañana
+            fecha_asignada = get_fecha_hoy()
+            if tipo == "manana":
+                fecha_asignada += timedelta(days=1)
+                
             supabase.table("misiones_diarias").insert({
                 "jugador_id": jugador_id,
                 "titulo": datos_mision.get('titulo', '[DIARIA] Tarea'),
                 "descripcion": datos_mision.get('descripcion', ''),
-                "categoria": "especial", # Cambiado a 'especial' para evitar rechazos de base de datos
+                "categoria": "especial", 
                 "rango": datos_mision.get('rango', 'C'),
                 "zona_muscular": datos_mision.get('zona_muscular', 'intelecto'),
-                "fecha": get_fecha_hoy().isoformat(),
+                "fecha": fecha_asignada.isoformat(),
                 "estado": "pendiente",
                 "tipo_mision": "diaria", 
                 "xp_recompensa_dinamica": int(datos_mision.get('xp_recompensa', 40))
@@ -295,7 +299,6 @@ def crear_mision_ia(jugador_id, contexto_usuario, tipo="epica"):
             
         return True, ""
     except Exception as e:
-        # Si falla algo (tipo de dato, clave, BD), devolvemos el error exacto para verlo en pantalla
         return False, str(e)
 
 def otorgar_xp(jugador_id, cantidad_xp, zona_muscular=None):
@@ -439,19 +442,24 @@ with col3:
 st.markdown("---")
 
 with st.expander("🔮 ORÁCULO DEL SISTEMA (Forjar Misiones y Campañas)"):
-    st.write("Configura tus objetivos. Usa Campañas para metas a largo plazo (se desglosarán en días) o Misiones Simples para tareas únicas de autorregulación (sólo por hoy).")
+    st.write("Configura tus objetivos. Usa Campañas para metas a largo plazo, o Misiones Simples para tareas únicas de autorregulación.")
     
-    tipo_mision = st.radio("Tipo de Forja:", ["Misión Diaria Simple (Para hoy)", "Campaña Épica (Largo Plazo)"])
+    tipo_mision = st.radio("Tipo de Forja:", ["Misión Diaria Simple (Para hoy)", "Misión Simple (Para Mañana)", "Campaña Épica (Largo Plazo)"])
     prompt_mision = st.text_area("Contexto:", placeholder="Ej: Mirar 3 videos de inecuaciones en Youtube y tomar apuntes...")
     
     if st.button("⚡ Forjar con IA"):
         if prompt_mision:
             with st.spinner("El Sistema está forjando tu destino..."):
-                tipo_param = "simple" if "Simple" in tipo_mision else "epica"
+                tipo_param = "epica"
+                if "Para hoy" in tipo_mision: tipo_param = "simple"
+                elif "Mañana" in tipo_mision: tipo_param = "manana"
+                
                 exito, msg_error = crear_mision_ia(perfil['id'], prompt_mision, tipo=tipo_param)
                 if exito:
                     if tipo_param == "simple":
                         st.success("Misión Diaria inyectada. Ya puedes verla en tu Quest Board de hoy.")
+                    elif tipo_param == "manana":
+                        st.success("Misión Programada. Se activará mañana, pero ya la puedes ver en tu panel.")
                     else:
                         st.success("Misión Épica registrada. Extrae tus misiones diarias para obtener tus primeras sub-tareas.")
                     st.rerun()
@@ -674,12 +682,15 @@ else:
     st.subheader("📜 QUEST BOARD")
     misiones_activas = obtener_misiones_activas(perfil['id'])
 
-    epicas = [m for m in misiones_activas if m.get('tipo_mision') == 'epica' and m.get('estado') == 'pendiente']
-    diarias = [m for m in misiones_activas if m.get('tipo_mision') == 'diaria' and m.get('estado') == 'pendiente']
-    completadas = [m for m in misiones_activas if m.get('estado') == 'completada' and m.get('fecha') == get_fecha_hoy().isoformat()]
-
     hoy_str = get_fecha_hoy().isoformat()
-    diarias_generadas_hoy = [m for m in misiones_activas if m.get('tipo_mision') == 'diaria' and m.get('fecha') == hoy_str and m.get('parent_id') is not None]
+    manana_str = (get_fecha_hoy() + timedelta(days=1)).isoformat()
+
+    epicas = [m for m in misiones_activas if m.get('tipo_mision') == 'epica' and m.get('estado') == 'pendiente']
+    diarias = [m for m in misiones_activas if m.get('tipo_mision') == 'diaria' and m.get('estado') == 'pendiente' and m.get('fecha') == hoy_str]
+    programadas_manana = [m for m in misiones_activas if m.get('tipo_mision') == 'diaria' and m.get('estado') == 'pendiente' and m.get('fecha') == manana_str]
+    completadas = [m for m in misiones_activas if m.get('estado') == 'completada' and m.get('fecha') == hoy_str]
+
+    diarias_generadas_hoy = [m for m in diarias if m.get('parent_id') is not None]
 
     if epicas:
         st.write("### 👑 CAMPAÑAS ACTIVAS (LARGO PLAZO)")
@@ -734,6 +745,17 @@ else:
                     if st.button("❌ Rechazar", key=f"rech_{mision['id']}", use_container_width=True):
                         supabase.table("misiones_diarias").delete().eq("id", mision['id']).execute()
                         st.rerun()
+                        
+    if programadas_manana:
+        st.write("### 📅 PROGRAMADAS PARA MAÑANA")
+        for mision in programadas_manana:
+            with st.container(border=True):
+                st.markdown(f"<h4 style='color: #888888;'>[⏳] {mision['titulo']}</h4>", unsafe_allow_html=True)
+                st.caption(f"ZONA DE IMPACTO: **{mision.get('zona_muscular', 'N/A').upper()}**")
+                st.write(mision['descripcion'])
+                if st.button("❌ Cancelar Programación", key=f"rech_manana_{mision['id']}", use_container_width=True):
+                    supabase.table("misiones_diarias").delete().eq("id", mision['id']).execute()
+                    st.rerun()
                         
     if completadas:
         st.write("### 🏆 REGISTRO DE VICTORIAS HOY")
